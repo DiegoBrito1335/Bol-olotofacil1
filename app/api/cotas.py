@@ -6,6 +6,10 @@ from fastapi import APIRouter, HTTPException, Depends, status
 from pydantic import BaseModel
 from app.core.supabase import supabase_admin as supabase
 from app.api.deps import get_current_user
+import logging
+import traceback
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -32,11 +36,11 @@ async def comprar_cota(
     current_user = Depends(get_current_user)
 ):
     """
-    Compra uma ou mais cotas de um bolão.
-    Usa a função do banco que faz tudo atomicamente.
+    Compra uma ou mais cotas de um bolao.
+    Usa a funcao do banco que faz tudo atomicamente.
     """
-    
-    # Chamar função do banco que faz compra atômica
+
+    # Chamar funcao do banco que faz compra atomica
     result = supabase.rpc(
         "comprar_cota",
         {
@@ -45,22 +49,22 @@ async def comprar_cota(
             "p_quantidade": request.quantidade
         }
     ).execute()
-    
+
     if result.error:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Erro ao comprar cota: {result.error}"
         )
-    
-    # Resultado da função
+
+    # Resultado da funcao
     resultado = result.data
-    
+
     if not resultado.get("sucesso"):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=resultado.get("mensagem", "Erro ao comprar cota")
         )
-    
+
     return ComprarCotaResponse(
         mensagem="Cota comprada com sucesso!",
         cota_id=resultado.get("cota_id", ""),
@@ -76,18 +80,33 @@ async def minhas_cotas(
     current_user = Depends(get_current_user)
 ):
     """
-    Lista todas as cotas do usuário logado
+    Lista todas as cotas do usuario logado.
+    Usa funcao SECURITY DEFINER para bypassar RLS.
     """
-    
-    result = supabase.table("cotas")\
-        .select("*, boloes(*)")\
-        .eq("usuario_id", current_user["id"])\
-        .execute()
-    
-    if result.error:
+
+    try:
+        logger.info(f"Buscando cotas para usuario: {current_user['id']}")
+
+        result = supabase.rpc(
+            "buscar_minhas_cotas",
+            {"p_usuario_id": current_user["id"]}
+        ).execute()
+
+        logger.info(f"Resultado RPC: error={result.error}, data_type={type(result.data)}")
+
+        if result.error:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Erro ao buscar cotas: {result.error}"
+            )
+
+        return result.data or []
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Erro em /minhas: {traceback.format_exc()}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Erro ao buscar cotas: {result.error}"
+            detail=f"Erro interno: {str(e)}"
         )
-    
-    return result.data or []

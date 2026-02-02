@@ -75,8 +75,8 @@ class PagamentoService:
                 "webhook_data": {"mode": "simulated", "note": "Pix simulado para desenvolvimento"}
             }
             
-            result = supabase.table("pagamentos_pix").insert(pagamento_db)
-            
+            result = supabase.table("pagamentos_pix").insert(pagamento_db).execute()
+
             if result.error:
                 logger.error(f"Erro ao salvar pagamento no banco: {result.error}")
                 return None

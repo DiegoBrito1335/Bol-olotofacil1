@@ -6,6 +6,7 @@ from fastapi import APIRouter, HTTPException, Depends, status
 from typing import List, Optional
 from app.core.supabase import supabase_admin as supabase
 from app.schemas.bolao import BolaoResponse, JogosResponse
+from app.schemas.admin import BolaoCreateAdmin
 from app.api.deps import get_current_user_optional
 
 router = APIRouter()
@@ -113,6 +114,58 @@ async def ver_jogos_bolao(bolao_id: str):
         return []
     
     return jogos_result.data
+
+
+# ===================================
+# CRIAR BOLAO (redireciona do frontend)
+# ===================================
+
+@router.post("", status_code=status.HTTP_201_CREATED)
+async def criar_bolao_via_public(bolao_data: BolaoCreateAdmin):
+    """
+    Cria um novo bolao.
+    Rota acessivel via /api/v1/boloes (POST) para compatibilidade com o frontend.
+    """
+
+    # Verificar se ja existe bolao com mesmo concurso aberto
+    existing = supabase.table("boloes")\
+        .select("id")\
+        .eq("concurso_numero", bolao_data.concurso_numero)\
+        .eq("status", "aberto")\
+        .execute()
+
+    if existing.data:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Ja existe um bolao aberto para o concurso {bolao_data.concurso_numero}"
+        )
+
+    bolao_dict = {
+        "nome": bolao_data.nome,
+        "descricao": bolao_data.descricao,
+        "concurso_numero": bolao_data.concurso_numero,
+        "total_cotas": bolao_data.total_cotas,
+        "cotas_disponiveis": bolao_data.total_cotas,
+        "valor_cota": float(bolao_data.valor_cota),
+        "status": bolao_data.status,
+        "data_fechamento": bolao_data.data_fechamento.isoformat() if bolao_data.data_fechamento else None
+    }
+
+    result = supabase.table("boloes").insert(bolao_dict).execute()
+
+    if result.error:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Erro ao criar bolao: {result.error}"
+        )
+
+    if not result.data:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Erro ao criar bolao - nenhum dado retornado"
+        )
+
+    return result.data[0] if isinstance(result.data, list) else result.data
 
 
 # ===================================

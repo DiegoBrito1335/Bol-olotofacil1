@@ -7,6 +7,7 @@ from app.api import transacoes
 # ====================================
 # IMPORTS DAS ROTAS PÚBLICAS
 # ====================================
+from app.api import auth
 from app.api import carteira
 from app.api import boloes
 from app.api import pagamentos
@@ -16,6 +17,7 @@ from app.api import cotas
 # IMPORTS DAS ROTAS ADMIN
 # ====================================
 from app.api.v1.admin.boloes import router as admin_boloes_router
+from app.api.v1.admin.stats import router as admin_stats_router
 
 
 # Configurar logs
@@ -32,13 +34,14 @@ app = FastAPI(
     description="Backend da plataforma de bolões da Lotofácil",
     version="1.0.0",
     docs_url="/docs",
-    redoc_url="/redoc"
+    redoc_url="/redoc",
+    redirect_slashes=False
 )
 
 # Configurar CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=settings.cors_origins_list,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -47,6 +50,12 @@ app.add_middleware(
 # ====================================
 # INCLUIR ROTAS PÚBLICAS
 # ====================================
+
+app.include_router(
+    auth.router,
+    prefix="/api/v1/auth",
+    tags=["Autenticação"]
+)
 
 app.include_router(
     transacoes.router,
@@ -86,6 +95,12 @@ app.include_router(
     admin_boloes_router,
     prefix="/api/v1/admin/boloes",
     tags=["Admin - Bolões"]
+)
+
+app.include_router(
+    admin_stats_router,
+    prefix="/api/v1/admin",
+    tags=["Admin - Dashboard"]
 )
 
 # ====================================

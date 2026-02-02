@@ -8,11 +8,12 @@ class JogoResponse(BaseModel):
     """
     Resposta de um jogo (dezenas)
     """
-    id: str  # MUDOU: UUID4 -> str
-    bolao_id: str  # MUDOU: UUID4 -> str
+    id: str
+    bolao_id: str
     dezenas: List[int]
+    acertos: Optional[int] = None
     created_at: datetime
-    
+
     class Config:
         from_attributes = True
 
@@ -54,7 +55,8 @@ class BolaoDetalhes(BolaoListItem):
     data_fechamento: Optional[datetime] = None
     updated_at: datetime
     jogos: List[JogoResponse] = []
-    
+    resultado_dezenas: Optional[List[int]] = None
+
     class Config:
         from_attributes = True
 

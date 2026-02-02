@@ -4,9 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Backend for a Lotofacil lottery pool platform ("Bolao Lotofacil"). Users can browse pools, purchase quotas/shares, manage wallets, and pay via Pix (Mercado Pago integration). Built with Python/FastAPI, using Supabase (PostgreSQL) as the database via a custom HTTP client.
+Backend for a Lotofácil lottery pool platform ("Bolão Lotofácil"). Users can browse pools, purchase quotas/shares, manage wallets, and pay via Pix (Mercado Pago integration). Admins can create/edit pools, add lottery games (15 numbers from 1-25), and run result appraisals (manual or automatic via Lotofácil API).
 
-The codebase and comments are written in Brazilian Portuguese.
+Built with Python/FastAPI, using Supabase (PostgreSQL) as the database via a custom HTTP client. The codebase and comments are written in Brazilian Portuguese.
 
 ## Commands
 
@@ -30,22 +30,35 @@ pip install -r requirements.txt
 
 ```
 app/
-├── main.py              # FastAPI app, CORS, router registration
-├── config.py            # Pydantic Settings loaded from .env
-├── api/                 # Route handlers (controllers)
-│   ├── deps.py          # Auth dependency injection
-│   ├── boloes.py        # Public pool routes
-│   ├── cotas.py         # Quota purchase routes
-│   ├── carteira.py      # Wallet routes
-│   ├── pagamentos.py    # Pix payment routes
-│   ├── transacoes.py    # Transaction routes
-│   └── v1/admin/        # Admin-only routes
-├── services/            # Business logic layer
-├── schemas/             # Pydantic request/response models
+├── main.py                  # FastAPI app, CORS, router registration
+├── config.py                # Pydantic Settings loaded from .env
+├── api/                     # Route handlers (controllers)
+│   ├── deps.py              # Auth dependency injection
+│   ├── auth.py              # User registration & login
+│   ├── boloes.py            # Public pool routes
+│   ├── cotas.py             # Quota purchase routes
+│   ├── carteira.py          # Wallet routes
+│   ├── pagamentos.py        # Pix payment routes
+│   ├── transacoes.py        # Transaction routes
+│   └── v1/admin/            # Admin-only routes
+│       ├── boloes.py        # Pool CRUD, game management, apuração
+│       └── stats.py         # Dashboard statistics & activity feed
+├── services/                # Business logic layer
+│   ├── bolao_service.py     # Pool queries
+│   ├── carteira_service.py  # Wallet queries
+│   ├── cota_service.py      # Quota purchase logic
+│   ├── pagamento_service.py # Mercado Pago Pix integration
+│   └── resultado_service.py # Lotofácil result fetching & apuração
+├── schemas/                 # Pydantic request/response models
+│   ├── admin.py             # Admin schemas (pool CRUD, games, resultado)
+│   ├── bolao.py             # Pool & game response schemas
+│   ├── carteira.py          # Wallet schemas
+│   ├── cota.py              # Quota schemas
+│   └── pagamento.py         # Payment schemas
 ├── core/
-│   ├── supabase.py      # Custom Supabase HTTP client
-│   └── security.py      # (placeholder for JWT validation)
-└── utils/               # Utility helpers
+│   ├── supabase.py          # Custom Supabase HTTP client (httpx-based)
+│   └── security.py          # (placeholder for JWT validation)
+└── utils/                   # Utility helpers
 ```
 
 ### Data access pattern
@@ -54,13 +67,19 @@ There is **no ORM**. `app/core/supabase.py` implements a custom HTTP client (`Su
 
 ```python
 supabase.table("boloes").select("*").eq("status", "aberto").execute()
+supabase.table("boloes").select("id, nome").in_("id", list_of_ids).execute()
 ```
 
-Two global client instances are defined at module level in `core/supabase.py`:
-- `supabase` — uses the anon key (public/user-level access)
-- `supabase_admin` — uses the service role key (admin/privileged access)
+Key classes:
+- `SupabaseHTTPClient` — holds a persistent `httpx.Client` for connection pooling. Methods: `.table(name)`, `.rpc(fn, params)`
+- `TableQuery` — chainable builder with `.select()`, `.eq()`, `.in_()`, `.limit()`, `.order()`, `.insert()`, `.update()`, `.delete()`, `.execute()`
+- `RPCQuery` — calls Supabase PostgreSQL functions via REST
 
-Complex atomic operations use Supabase RPC functions (e.g., `comprar_cota` for quota purchases).
+Two global client instances:
+- `supabase` — uses the anon key (public/user-level access)
+- `supabase_admin` — uses the service role key (bypasses RLS)
+
+All admin and service-layer code uses `supabase_admin` to bypass Row Level Security. Complex atomic operations use Supabase RPC functions (e.g., `comprar_cota` for quota purchases).
 
 ### Authentication
 
@@ -69,30 +88,59 @@ Currently in **test/development mode**: the `Authorization: Bearer {user_id}` he
 - `get_current_user_optional()` — returns None if unauthenticated
 - `get_current_user()` — returns `{"id": user_id}` dict
 
+Registration and login endpoints are in `app/api/auth.py`, using Supabase Auth API directly via httpx.
+
 JWT validation is not yet implemented (security.py is empty).
 
 ### API route prefixes
 
 All routes are under `/api/v1/`:
-- `/api/v1/boloes` — public pool browsing
+- `/api/v1/auth` — registration and login
+- `/api/v1/boloes` — public pool browsing and game listing
 - `/api/v1/cotas` — quota management and purchase
 - `/api/v1/carteira` — wallet balance
 - `/api/v1/pagamentos` — Pix payment creation and webhooks
 - `/api/v1/transacoes` — transaction history
-- `/api/v1/admin/boloes` — admin pool CRUD
+- `/api/v1/admin/boloes` — admin pool CRUD, game management, apuração
+- `/api/v1/admin/stats` — dashboard statistics and activity feed
 
-### Payment flow
+### Key features
 
-Pix payments go through Mercado Pago. `PagamentoService` creates charges and handles webhook callbacks. In development/sandbox mode, payments are simulated. The webhook endpoint is `/api/v1/pagamentos/webhook/mercadopago`.
+**Game management (jogos):** Admins can add lottery games (exactly 15 numbers from 1-25) to pools via `POST /admin/boloes/{id}/jogos`. Numbers are validated and stored sorted.
+
+**Result appraisal (apuração):** Two modes:
+- **Automatic:** `POST /admin/boloes/{id}/apurar/automatico` — fetches drawn numbers from `loteriascaixa-api.herokuapp.com/api/lotofacil/{concurso}` and calculates hits per game
+- **Manual:** `POST /admin/boloes/{id}/apurar` — admin provides the 15 drawn numbers
+
+Both update each game's `acertos` (hit count) and set the pool status to `apurado`.
+
+**Payment flow:** Pix payments go through Mercado Pago. `PagamentoService` creates charges and handles webhook callbacks. In development/sandbox mode, payments are simulated. The webhook endpoint is `/api/v1/pagamentos/webhook/mercadopago`.
 
 ### Supabase tables
 
-`boloes`, `cotas`, `carteira`, `transacoes`, `pagamentos_pix`, `jogos_bolao`
+| Table | Key columns |
+|-------|-------------|
+| `boloes` | id, nome, concurso_numero, total_cotas, cotas_disponiveis, valor_cota, status, resultado_dezenas |
+| `jogos_bolao` | id, bolao_id, dezenas (int[]), acertos |
+| `cotas` | id, bolao_id, usuario_id, valor_pago |
+| `carteira` | id, usuario_id, saldo_disponivel, saldo_bloqueado |
+| `transacoes` | id, usuario_id, tipo, valor, origem, saldo_anterior, saldo_posterior |
+| `pagamentos_pix` | id, usuario_id, valor, status, qr_code, external_id |
+| `usuarios` | id, nome, telefone |
+
+Pool statuses: `aberto`, `fechado`, `apurado`, `cancelado`
+
+### RPC functions
+
+- `comprar_cota(p_usuario_id, p_bolao_id, p_quantidade)` — atomic quota purchase (debit wallet, create cota, update pool)
+- `buscar_minhas_cotas(p_usuario_id)` — get user's quotas (SECURITY DEFINER to bypass RLS)
 
 ## Environment Setup
 
 Copy `.env.example` to `.env` and fill in values. Required variables:
-- `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `DATABASE_URL`
+- `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`
 - `SECRET_KEY`
 
 Optional (payments): `MERCADOPAGO_ACCESS_TOKEN`, `MERCADOPAGO_ENV`, `WEBHOOK_URL`
+
+Frontend dev server runs on port 3000 and proxies `/api` to this backend on port 8000.

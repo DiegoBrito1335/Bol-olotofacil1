@@ -8,9 +8,13 @@ from datetime import datetime
 
 from app.core.supabase import supabase_admin as supabase
 from app.schemas.bolao import BolaoResponse
-from app.schemas.admin import BolaoCreateAdmin, BolaoUpdateAdmin
+from app.schemas.admin import BolaoCreateAdmin, BolaoUpdateAdmin, JogosCreateBatchAdmin, ResultadoInput
+from app.services.resultado_service import ResultadoService
+import logging
 
-router = APIRouter(prefix="/admin/boloes", tags=["Admin - Bolões"])
+logger = logging.getLogger(__name__)
+
+router = APIRouter()
 
 # ===================================
 
@@ -116,7 +120,7 @@ async def criar_bolao(
         "concurso_numero": bolao_data.concurso_numero,
         "total_cotas": bolao_data.total_cotas,
         "cotas_disponiveis": bolao_data.total_cotas,  # Inicialmente todas disponíveis
-        "valor_cota": bolao_data.valor_cota,
+        "valor_cota": float(bolao_data.valor_cota),
         "status": bolao_data.status,
         "data_fechamento": bolao_data.data_fechamento.isoformat() if bolao_data.data_fechamento else None
     }
@@ -210,7 +214,7 @@ async def atualizar_bolao(
         update_dict["cotas_disponiveis"] = bolao_data.total_cotas - cotas_vendidas
     
     if bolao_data.valor_cota is not None:
-        update_dict["valor_cota"] = bolao_data.valor_cota
+        update_dict["valor_cota"] = float(bolao_data.valor_cota)
     
     if bolao_data.data_fechamento is not None:
         update_dict["data_fechamento"] = bolao_data.data_fechamento.isoformat()
@@ -365,3 +369,264 @@ async def deletar_bolao(
         "mensagem": "Bolão deletado com sucesso",
         "bolao_id": bolao_id
     }
+
+
+# ===================================
+# GERENCIAR JOGOS DO BOLÃO
+# ===================================
+
+@router.post("/{bolao_id}/jogos", status_code=status.HTTP_201_CREATED)
+async def adicionar_jogos(bolao_id: str, data: JogosCreateBatchAdmin):
+    """
+    Adiciona um ou mais jogos (dezenas) a um bolão.
+    """
+    # Verificar se bolão existe
+    existing = supabase.table("boloes").select("id, status").eq("id", bolao_id).execute()
+
+    if not existing.data:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Bolão não encontrado"
+        )
+
+    bolao = existing.data[0] if isinstance(existing.data, list) else existing.data
+
+    if bolao["status"] == "apurado":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Não é possível adicionar jogos a um bolão já apurado"
+        )
+
+    # Preparar dados para inserção batch
+    jogos_insert = [
+        {"bolao_id": bolao_id, "dezenas": jogo.dezenas}
+        for jogo in data.jogos
+    ]
+
+    result = supabase.table("jogos_bolao").insert(jogos_insert).execute()
+
+    if result.error:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Erro ao adicionar jogos: {result.error}"
+        )
+
+    return result.data or []
+
+
+@router.delete("/{bolao_id}/jogos/{jogo_id}")
+async def remover_jogo(bolao_id: str, jogo_id: str):
+    """
+    Remove um jogo específico de um bolão.
+    """
+    # Verificar se bolão existe e não está apurado
+    existing = supabase.table("boloes").select("id, status").eq("id", bolao_id).execute()
+
+    if not existing.data:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Bolão não encontrado"
+        )
+
+    bolao = existing.data[0] if isinstance(existing.data, list) else existing.data
+
+    if bolao["status"] == "apurado":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Não é possível remover jogos de um bolão já apurado"
+        )
+
+    result = supabase.table("jogos_bolao")\
+        .delete()\
+        .eq("id", jogo_id)\
+        .eq("bolao_id", bolao_id)\
+        .execute()
+
+    return {"mensagem": "Jogo removido com sucesso", "jogo_id": jogo_id}
+
+
+# ===================================
+# APURAÇÃO DE RESULTADOS
+# ===================================
+
+@router.post("/{bolao_id}/apurar")
+async def apurar_bolao_manual(bolao_id: str, resultado: ResultadoInput):
+    """
+    Apuração manual — admin informa os 15 números sorteados.
+    """
+    # Verificar bolão
+    existing = supabase.table("boloes").select("*").eq("id", bolao_id).execute()
+
+    if not existing.data:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Bolão não encontrado"
+        )
+
+    bolao = existing.data[0] if isinstance(existing.data, list) else existing.data
+
+    if bolao["status"] == "apurado":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Este bolão já foi apurado"
+        )
+
+    # Verificar se tem jogos
+    jogos_result = supabase.table("jogos_bolao").select("id").eq("bolao_id", bolao_id).execute()
+    if not jogos_result.data:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Este bolão não possui jogos cadastrados"
+        )
+
+    # Realizar apuração
+    resultado_apuracao = await ResultadoService.apurar_bolao(bolao_id, resultado.dezenas)
+    return resultado_apuracao
+
+
+@router.post("/{bolao_id}/apurar/automatico")
+async def apurar_bolao_automatico(bolao_id: str):
+    """
+    Apuração automática — busca resultado da API da Lotofácil.
+    """
+    # Verificar bolão
+    existing = supabase.table("boloes").select("*").eq("id", bolao_id).execute()
+
+    if not existing.data:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Bolão não encontrado"
+        )
+
+    bolao = existing.data[0] if isinstance(existing.data, list) else existing.data
+
+    if bolao["status"] == "apurado":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Este bolão já foi apurado"
+        )
+
+    # Verificar se tem jogos
+    jogos_result = supabase.table("jogos_bolao").select("id").eq("bolao_id", bolao_id).execute()
+    if not jogos_result.data:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Este bolão não possui jogos cadastrados"
+        )
+
+    # Buscar resultado da API
+    concurso = bolao["concurso_numero"]
+    resultado_dezenas = await ResultadoService.buscar_resultado_api(concurso)
+
+    if not resultado_dezenas:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Resultado do concurso {concurso} ainda não disponível na API"
+        )
+
+    # Realizar apuração
+    resultado_apuracao = await ResultadoService.apurar_bolao(bolao_id, resultado_dezenas)
+    return resultado_apuracao
+
+
+@router.get("/{bolao_id}/resultado")
+async def ver_resultado(bolao_id: str):
+    """
+    Retorna o resultado da apuração de um bolão.
+    """
+    # Buscar bolão
+    bolao_result = supabase.table("boloes").select("*").eq("id", bolao_id).execute()
+
+    if not bolao_result.data:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Bolão não encontrado"
+        )
+
+    bolao = bolao_result.data[0] if isinstance(bolao_result.data, list) else bolao_result.data
+
+    if not bolao.get("resultado_dezenas"):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Este bolão ainda não foi apurado"
+        )
+
+    # Buscar jogos com acertos
+    jogos_result = supabase.table("jogos_bolao")\
+        .select("*")\
+        .eq("bolao_id", bolao_id)\
+        .execute()
+
+    jogos = jogos_result.data or []
+
+    jogos_resultado = [
+        {
+            "jogo_id": j["id"],
+            "dezenas": j["dezenas"],
+            "acertos": j.get("acertos", 0),
+        }
+        for j in jogos
+    ]
+
+    resumo = {15: 0, 14: 0, 13: 0, 12: 0, 11: 0}
+    for j in jogos_resultado:
+        if j["acertos"] >= 11:
+            resumo[j["acertos"]] = resumo.get(j["acertos"], 0) + 1
+
+    return {
+        "bolao_id": bolao_id,
+        "concurso_numero": bolao["concurso_numero"],
+        "resultado_dezenas": bolao["resultado_dezenas"],
+        "jogos_resultado": jogos_resultado,
+        "resumo": resumo,
+    }
+
+
+# ===================================
+# MIGRAÇÃO DO BANCO
+# ===================================
+
+@router.post("/migrate/add-columns", tags=["Admin - Migração"])
+async def migrate_add_columns():
+    """
+    Adiciona colunas necessárias para apuração.
+    Executar uma vez. Seguro para rodar múltiplas vezes (IF NOT EXISTS).
+    """
+    from app.config import settings
+    import httpx
+
+    sql = """
+    ALTER TABLE boloes ADD COLUMN IF NOT EXISTS resultado_dezenas integer[] DEFAULT NULL;
+    ALTER TABLE jogos_bolao ADD COLUMN IF NOT EXISTS acertos integer DEFAULT NULL;
+    """
+
+    # Executar via Supabase SQL endpoint (REST)
+    url = f"{settings.SUPABASE_URL}/rest/v1/rpc/exec_sql"
+    headers = {
+        "apikey": settings.SUPABASE_SERVICE_ROLE_KEY,
+        "Authorization": f"Bearer {settings.SUPABASE_SERVICE_ROLE_KEY}",
+        "Content-Type": "application/json",
+    }
+
+    # Tentar via RPC primeiro
+    try:
+        response = httpx.post(url, json={"query": sql}, headers=headers, timeout=15.0)
+        if response.status_code in (200, 201):
+            return {"mensagem": "Migração executada com sucesso via RPC"}
+    except Exception:
+        pass
+
+    # Fallback: executar via SQL direto no endpoint do Supabase
+    sql_url = f"{settings.SUPABASE_URL}/rest/v1/rpc/"
+    try:
+        # Tentar adicionar colunas individualmente usando o Supabase Management API
+        # Se RPC não funcionar, as colunas precisam ser adicionadas manualmente
+        return {
+            "mensagem": "RPC não disponível. Execute o SQL manualmente no Supabase Dashboard",
+            "sql": sql.strip(),
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Erro na migração: {str(e)}"
+        )
