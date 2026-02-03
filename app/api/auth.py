@@ -25,7 +25,9 @@ class RegistroRequest(BaseModel):
 class RegistroResponse(BaseModel):
     id: str
     nome: str
+    email: str
     mensagem: str
+    is_admin: bool = False
 
 
 @router.post("/register", response_model=RegistroResponse, status_code=status.HTTP_201_CREATED)
@@ -125,10 +127,14 @@ async def registrar_usuario(request: RegistroRequest):
 
     logger.info(f"Usuário registrado: {usuario_id} - {request.nome}")
 
+    is_admin = request.email.strip().lower() in settings.admin_emails_list
+
     return RegistroResponse(
         id=usuario_id,
         nome=request.nome.strip(),
-        mensagem="Conta criada com sucesso!"
+        email=request.email.strip(),
+        mensagem="Conta criada com sucesso!",
+        is_admin=is_admin,
     )
 
 
@@ -141,6 +147,7 @@ class LoginResponse(BaseModel):
     id: str
     nome: str
     email: str
+    is_admin: bool = False
 
 
 @router.post("/login", response_model=LoginResponse)
@@ -209,8 +216,11 @@ async def login_usuario(request: LoginRequest):
 
     logger.info(f"Login bem-sucedido: {usuario_id} - {user_email}")
 
+    is_admin = user_email.lower() in settings.admin_emails_list
+
     return LoginResponse(
         id=usuario_id,
         nome=nome,
         email=user_email,
+        is_admin=is_admin,
     )

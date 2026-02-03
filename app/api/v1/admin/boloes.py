@@ -2,7 +2,7 @@
 Rotas administrativas para gerenciar bolões
 """
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from typing import List, Optional
 from datetime import datetime
 
@@ -10,11 +10,12 @@ from app.core.supabase import supabase_admin as supabase
 from app.schemas.bolao import BolaoResponse
 from app.schemas.admin import BolaoCreateAdmin, BolaoUpdateAdmin, JogosCreateBatchAdmin, ResultadoInput
 from app.services.resultado_service import ResultadoService
+from app.api.deps import get_admin_user
 import logging
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(get_admin_user)])
 
 # ===================================
 

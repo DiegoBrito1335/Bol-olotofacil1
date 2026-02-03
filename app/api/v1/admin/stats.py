@@ -2,14 +2,15 @@
 Rotas administrativas para estatisticas e dashboard
 """
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from datetime import datetime, timedelta
 from app.core.supabase import supabase_admin as supabase
+from app.api.deps import get_admin_user
 import logging
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(get_admin_user)])
 
 
 @router.get("/stats")
