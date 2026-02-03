@@ -104,6 +104,15 @@ app.include_router(
 )
 
 # ====================================
+# HEALTH CHECK
+# ====================================
+
+@app.get("/")
+async def health_check():
+    """Health check para Railway"""
+    return {"status": "ok", "service": "bolao-lotofacil-api"}
+
+# ====================================
 # EVENTOS
 # ====================================
 
