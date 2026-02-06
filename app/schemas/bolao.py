@@ -12,6 +12,7 @@ class JogoResponse(BaseModel):
     bolao_id: str
     dezenas: List[int]
     acertos: Optional[int] = None
+    acertos_por_concurso: Optional[List[dict]] = None
     created_at: datetime
 
     class Config:
@@ -29,6 +30,8 @@ class BolaoListItem(BaseModel):
     cotas_disponiveis: int
     valor_cota: Decimal
     concurso_numero: int
+    concurso_fim: Optional[int] = None
+    concursos_apurados: Optional[int] = 0
     status: str
     created_at: datetime
     

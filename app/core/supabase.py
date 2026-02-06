@@ -70,6 +70,26 @@ class TableQuery:
         values_str = ",".join(str(v) for v in values)
         self._filters.append(f"{column}=in.({values_str})")
         return self
+
+    def gte(self, column: str, value: Any):
+        """Adiciona filtro >= (maior ou igual)"""
+        self._filters.append(f"{column}=gte.{value}")
+        return self
+
+    def lte(self, column: str, value: Any):
+        """Adiciona filtro <= (menor ou igual)"""
+        self._filters.append(f"{column}=lte.{value}")
+        return self
+
+    def neq(self, column: str, value: Any):
+        """Adiciona filtro != (diferente)"""
+        self._filters.append(f"{column}=neq.{value}")
+        return self
+
+    def is_(self, column: str, value: str):
+        """Adiciona filtro IS (ex: is.null)"""
+        self._filters.append(f"{column}=is.{value}")
+        return self
     
     def limit(self, count: int):
         """Define limite de resultados"""

@@ -17,10 +17,22 @@ class BolaoCreateAdmin(BaseModel):
     nome: str = Field(..., min_length=3, max_length=100)
     descricao: Optional[str] = None
     concurso_numero: int = Field(..., gt=0)
+    concurso_fim: Optional[int] = Field(None, gt=0)
     total_cotas: int = Field(..., gt=0, le=1000)
     valor_cota: Decimal = Field(..., gt=0)
     status: str = Field(default="aberto", pattern="^(aberto|fechado|apurado|cancelado)$")
     data_fechamento: Optional[datetime] = None
+
+    @field_validator('concurso_fim')
+    @classmethod
+    def validate_concurso_fim(cls, v, info):
+        if v is not None:
+            concurso_numero = info.data.get('concurso_numero')
+            if concurso_numero and v <= concurso_numero:
+                raise ValueError('concurso_fim deve ser maior que concurso_numero')
+            if concurso_numero and (v - concurso_numero + 1) > 12:
+                raise ValueError('Teimosinha suporta no máximo 12 concursos')
+        return v
 
 
 class BolaoUpdateAdmin(BaseModel):
@@ -28,6 +40,7 @@ class BolaoUpdateAdmin(BaseModel):
     nome: Optional[str] = Field(None, min_length=3, max_length=100)
     descricao: Optional[str] = None
     concurso_numero: Optional[int] = Field(None, gt=0)
+    concurso_fim: Optional[int] = Field(None, gt=0)
     total_cotas: Optional[int] = Field(None, gt=0, le=1000)
     valor_cota: Optional[Decimal] = Field(None, gt=0)
     status: Optional[str] = Field(None, pattern="^(aberto|fechado|apurado|cancelado)$")
@@ -66,6 +79,7 @@ class JogosCreateBatchAdmin(BaseModel):
 class ResultadoInput(BaseModel):
     """Schema para input manual de resultado"""
     dezenas: List[int] = Field(..., min_length=15, max_length=15)
+    concurso_numero: Optional[int] = None
 
     @field_validator('dezenas')
     @classmethod

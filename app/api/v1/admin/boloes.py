@@ -10,6 +10,7 @@ from app.core.supabase import supabase_admin as supabase
 from app.schemas.bolao import BolaoResponse
 from app.schemas.admin import BolaoCreateAdmin, BolaoUpdateAdmin, JogosCreateBatchAdmin, ResultadoInput
 from app.services.resultado_service import ResultadoService
+from app.services.bolao_service import BolaoService
 from app.api.deps import get_admin_user
 import logging
 
@@ -119,6 +120,8 @@ async def criar_bolao(
         "nome": bolao_data.nome,
         "descricao": bolao_data.descricao,
         "concurso_numero": bolao_data.concurso_numero,
+        "concurso_fim": bolao_data.concurso_fim,
+        "concursos_apurados": 0,
         "total_cotas": bolao_data.total_cotas,
         "cotas_disponiveis": bolao_data.total_cotas,  # Inicialmente todas disponíveis
         "valor_cota": float(bolao_data.valor_cota),
@@ -199,7 +202,10 @@ async def atualizar_bolao(
     
     if bolao_data.concurso_numero is not None:
         update_dict["concurso_numero"] = bolao_data.concurso_numero
-    
+
+    if bolao_data.concurso_fim is not None:
+        update_dict["concurso_fim"] = bolao_data.concurso_fim
+
     if bolao_data.total_cotas is not None:
         # Verificar se não tem mais cotas vendidas do que o novo total
         cotas_result = supabase.table("cotas").select("id").eq("bolao_id", bolao_id).execute()
@@ -454,6 +460,7 @@ async def remover_jogo(bolao_id: str, jogo_id: str):
 async def apurar_bolao_manual(bolao_id: str, resultado: ResultadoInput):
     """
     Apuração manual — admin informa os 15 números sorteados.
+    Para teimosinha, informar concurso_numero no body.
     """
     # Verificar bolão
     existing = supabase.table("boloes").select("*").eq("id", bolao_id).execute()
@@ -480,7 +487,31 @@ async def apurar_bolao_manual(bolao_id: str, resultado: ResultadoInput):
             detail="Este bolão não possui jogos cadastrados"
         )
 
-    # Realizar apuração
+    # Teimosinha: apurar concurso específico
+    if BolaoService.is_teimosinha(bolao):
+        if not resultado.concurso_numero:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Para teimosinha, informe o concurso_numero no body"
+            )
+        concursos = BolaoService.concursos_list(bolao)
+        if resultado.concurso_numero not in concursos:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Concurso {resultado.concurso_numero} não pertence a este bolão (range: {concursos[0]}-{concursos[-1]})"
+            )
+        resultado_apuracao = await ResultadoService.apurar_concurso(bolao_id, resultado.concurso_numero, resultado.dezenas)
+
+        # Verificar se todos foram apurados
+        total = BolaoService.total_concursos(bolao)
+        bolao_atualizado = supabase.table("boloes").select("concursos_apurados").eq("id", bolao_id).execute()
+        apurados = bolao_atualizado.data[0]["concursos_apurados"] if bolao_atualizado.data else 0
+        if apurados >= total:
+            supabase.table("boloes").update({"status": "apurado"}).eq("id", bolao_id).execute()
+
+        return resultado_apuracao
+
+    # Concurso único: apuração normal
     resultado_apuracao = await ResultadoService.apurar_bolao(bolao_id, resultado.dezenas)
     return resultado_apuracao
 
@@ -489,6 +520,7 @@ async def apurar_bolao_manual(bolao_id: str, resultado: ResultadoInput):
 async def apurar_bolao_automatico(bolao_id: str):
     """
     Apuração automática — busca resultado da API da Lotofácil.
+    Para teimosinha, apura todos os concursos de uma vez.
     """
     # Verificar bolão
     existing = supabase.table("boloes").select("*").eq("id", bolao_id).execute()
@@ -515,7 +547,14 @@ async def apurar_bolao_automatico(bolao_id: str):
             detail="Este bolão não possui jogos cadastrados"
         )
 
-    # Buscar resultado da API
+    # Teimosinha: apurar todos os concursos
+    if BolaoService.is_teimosinha(bolao):
+        resultado = await ResultadoService.apurar_todos_concursos(bolao_id)
+        if resultado.get("erros"):
+            logger.warning(f"Erros na apuração teimosinha: {resultado['erros']}")
+        return resultado
+
+    # Concurso único: apuração normal
     concurso = bolao["concurso_numero"]
     resultado_dezenas = await ResultadoService.buscar_resultado_api(concurso)
 
@@ -525,15 +564,61 @@ async def apurar_bolao_automatico(bolao_id: str):
             detail=f"Resultado do concurso {concurso} ainda não disponível na API"
         )
 
-    # Realizar apuração
     resultado_apuracao = await ResultadoService.apurar_bolao(bolao_id, resultado_dezenas)
     return resultado_apuracao
+
+
+@router.get("/{bolao_id}/apuracao/status")
+async def status_apuracao(bolao_id: str):
+    """
+    Retorna o status da apuração de um bolão teimosinha.
+    """
+    bolao_result = supabase.table("boloes").select("*").eq("id", bolao_id).execute()
+
+    if not bolao_result.data:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Bolão não encontrado"
+        )
+
+    bolao = bolao_result.data[0]
+
+    if not BolaoService.is_teimosinha(bolao):
+        return {
+            "teimosinha": False,
+            "concurso_numero": bolao["concurso_numero"],
+            "apurado": bolao["status"] == "apurado",
+        }
+
+    concursos = BolaoService.concursos_list(bolao)
+
+    # Buscar concursos já apurados
+    apurados_result = supabase.table("resultados_concurso")\
+        .select("concurso_numero")\
+        .eq("bolao_id", bolao_id)\
+        .execute()
+    concursos_apurados = {r["concurso_numero"] for r in (apurados_result.data or [])}
+
+    status_concursos = [
+        {"concurso_numero": c, "apurado": c in concursos_apurados}
+        for c in concursos
+    ]
+
+    return {
+        "teimosinha": True,
+        "concurso_numero": bolao["concurso_numero"],
+        "concurso_fim": bolao["concurso_fim"],
+        "total_concursos": len(concursos),
+        "concursos_apurados": len(concursos_apurados),
+        "concursos": status_concursos,
+    }
 
 
 @router.get("/{bolao_id}/resultado")
 async def ver_resultado(bolao_id: str):
     """
     Retorna o resultado da apuração de um bolão.
+    Para teimosinha, retorna resultados agrupados por concurso.
     """
     # Buscar bolão
     bolao_result = supabase.table("boloes").select("*").eq("id", bolao_id).execute()
@@ -546,13 +631,74 @@ async def ver_resultado(bolao_id: str):
 
     bolao = bolao_result.data[0] if isinstance(bolao_result.data, list) else bolao_result.data
 
+    # Teimosinha: resultado por concurso
+    if BolaoService.is_teimosinha(bolao):
+        resultados = await ResultadoService.get_resultados_teimosinha(bolao_id)
+        if not resultados:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Este bolão ainda não possui concursos apurados"
+            )
+
+        # Buscar jogos
+        jogos_result = supabase.table("jogos_bolao").select("*").eq("bolao_id", bolao_id).execute()
+        jogos = jogos_result.data or []
+
+        # Buscar acertos por concurso
+        acertos_data = await ResultadoService.get_acertos_por_concurso(bolao_id)
+        # Agrupar por concurso_numero
+        acertos_por_concurso = {}
+        for a in acertos_data:
+            c = a["concurso_numero"]
+            if c not in acertos_por_concurso:
+                acertos_por_concurso[c] = []
+            acertos_por_concurso[c].append(a)
+
+        resultados_formatados = []
+        resumo_geral = {15: 0, 14: 0, 13: 0, 12: 0, 11: 0}
+
+        for res in resultados:
+            concurso = res["concurso_numero"]
+            acertos_concurso = acertos_por_concurso.get(concurso, [])
+
+            jogos_resultado = []
+            resumo = {15: 0, 14: 0, 13: 0, 12: 0, 11: 0}
+
+            for jogo in jogos:
+                acerto = next((a for a in acertos_concurso if a["jogo_id"] == jogo["id"]), None)
+                acertos_val = acerto["acertos"] if acerto else 0
+                jogos_resultado.append({
+                    "jogo_id": jogo["id"],
+                    "dezenas": jogo["dezenas"],
+                    "acertos": acertos_val,
+                })
+                if acertos_val >= 11:
+                    resumo[acertos_val] = resumo.get(acertos_val, 0) + 1
+                    resumo_geral[acertos_val] = resumo_geral.get(acertos_val, 0) + 1
+
+            resultados_formatados.append({
+                "concurso_numero": concurso,
+                "dezenas": res["dezenas"],
+                "jogos_resultado": jogos_resultado,
+                "resumo": resumo,
+            })
+
+        return {
+            "bolao_id": bolao_id,
+            "teimosinha": True,
+            "concurso_numero": bolao["concurso_numero"],
+            "concurso_fim": bolao["concurso_fim"],
+            "resultados": resultados_formatados,
+            "resumo_geral": resumo_geral,
+        }
+
+    # Concurso único: resultado normal
     if not bolao.get("resultado_dezenas"):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Este bolão ainda não foi apurado"
         )
 
-    # Buscar jogos com acertos
     jogos_result = supabase.table("jogos_bolao")\
         .select("*")\
         .eq("bolao_id", bolao_id)\
@@ -576,6 +722,7 @@ async def ver_resultado(bolao_id: str):
 
     return {
         "bolao_id": bolao_id,
+        "teimosinha": False,
         "concurso_numero": bolao["concurso_numero"],
         "resultado_dezenas": bolao["resultado_dezenas"],
         "jogos_resultado": jogos_resultado,

@@ -110,3 +110,22 @@ class BolaoService:
             return False
         
         return bolao.get("status") == "aberto" and bolao.get("cotas_disponiveis", 0) > 0
+
+    @staticmethod
+    def is_teimosinha(bolao: Dict[str, Any]) -> bool:
+        """Verifica se o bolão é teimosinha (múltiplos concursos)"""
+        return bolao.get("concurso_fim") is not None and bolao["concurso_fim"] > bolao["concurso_numero"]
+
+    @staticmethod
+    def total_concursos(bolao: Dict[str, Any]) -> int:
+        """Retorna o total de concursos do bolão"""
+        if bolao.get("concurso_fim") and bolao["concurso_fim"] > bolao["concurso_numero"]:
+            return bolao["concurso_fim"] - bolao["concurso_numero"] + 1
+        return 1
+
+    @staticmethod
+    def concursos_list(bolao: Dict[str, Any]) -> List[int]:
+        """Retorna lista de todos os concursos do bolão"""
+        if bolao.get("concurso_fim") and bolao["concurso_fim"] > bolao["concurso_numero"]:
+            return list(range(bolao["concurso_numero"], bolao["concurso_fim"] + 1))
+        return [bolao["concurso_numero"]]

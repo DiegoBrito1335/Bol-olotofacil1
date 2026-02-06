@@ -24,42 +24,23 @@ pip install -r requirements.txt
 - Swagger UI: http://localhost:8000/docs
 - ReDoc: http://localhost:8000/redoc
 
+### No tests
+There is no test suite yet. `tests/test_api.py` exists but is empty.
+
 ## Architecture
 
 ### Layered structure
 
 ```
-app/
-├── main.py                  # FastAPI app, CORS, router registration
-├── config.py                # Pydantic Settings loaded from .env
-├── api/                     # Route handlers (controllers)
-│   ├── deps.py              # Auth dependency injection
-│   ├── auth.py              # User registration & login
-│   ├── boloes.py            # Public pool routes
-│   ├── cotas.py             # Quota purchase routes
-│   ├── carteira.py          # Wallet routes
-│   ├── pagamentos.py        # Pix payment routes
-│   ├── transacoes.py        # Transaction routes
-│   └── v1/admin/            # Admin-only routes
-│       ├── boloes.py        # Pool CRUD, game management, apuração
-│       └── stats.py         # Dashboard statistics & activity feed
-├── services/                # Business logic layer
-│   ├── bolao_service.py     # Pool queries
-│   ├── carteira_service.py  # Wallet queries
-│   ├── cota_service.py      # Quota purchase logic
-│   ├── pagamento_service.py # Mercado Pago Pix integration
-│   └── resultado_service.py # Lotofácil result fetching & apuração
-├── schemas/                 # Pydantic request/response models
-│   ├── admin.py             # Admin schemas (pool CRUD, games, resultado)
-│   ├── bolao.py             # Pool & game response schemas
-│   ├── carteira.py          # Wallet schemas
-│   ├── cota.py              # Quota schemas
-│   └── pagamento.py         # Payment schemas
-├── core/
-│   ├── supabase.py          # Custom Supabase HTTP client (httpx-based)
-│   └── security.py          # (placeholder for JWT validation)
-└── utils/                   # Utility helpers
+Routes (app/api/) → Services (app/services/) → Supabase HTTP Client (app/core/supabase.py) → Database
+Schemas (app/schemas/) provide Pydantic validation at the route layer.
 ```
+
+- `app/main.py` — FastAPI app, CORS, router registration, health check (`GET /`). `redirect_slashes=False`.
+- `app/config.py` — Pydantic Settings loaded from `.env`. Properties: `cors_origins_list`, `admin_emails_list` parse comma-separated env vars.
+- `app/api/deps.py` — Auth dependency injection (user auth + admin check)
+- `app/api/v1/admin/` — Admin-only routes (pool CRUD, games, apuração, stats)
+- `app/core/security.py` — Placeholder (JWT validation not yet implemented)
 
 ### Data access pattern
 
@@ -74,23 +55,25 @@ Key classes:
 - `SupabaseHTTPClient` — holds a persistent `httpx.Client` for connection pooling. Methods: `.table(name)`, `.rpc(fn, params)`
 - `TableQuery` — chainable builder with `.select()`, `.eq()`, `.in_()`, `.limit()`, `.order()`, `.insert()`, `.update()`, `.delete()`, `.execute()`
 - `RPCQuery` — calls Supabase PostgreSQL functions via REST
+- `QueryResponse` — response wrapper with `.data` (list/dict or None) and `.error` (str or None). **Always check `.error` before using `.data`.**
 
-Two global client instances:
+Two global client instances (imported from `app.core.supabase`):
 - `supabase` — uses the anon key (public/user-level access)
 - `supabase_admin` — uses the service role key (bypasses RLS)
 
 All admin and service-layer code uses `supabase_admin` to bypass Row Level Security. Complex atomic operations use Supabase RPC functions (e.g., `comprar_cota` for quota purchases).
 
-### Authentication
+### Authentication and authorization
 
-Currently in **test/development mode**: the `Authorization: Bearer {user_id}` header passes the Supabase user UUID directly. Auth dependencies are in `app/api/deps.py`:
+Currently in **test/development mode**: the `Authorization: Bearer {user_id}` header passes the Supabase user UUID directly (no JWT validation). Auth dependencies in `app/api/deps.py`:
 - `get_current_user_id()` — required, raises 401 if missing
 - `get_current_user_optional()` — returns None if unauthenticated
 - `get_current_user()` — returns `{"id": user_id}` dict
+- `get_admin_user()` — verifies user email is in `ADMIN_EMAILS` whitelist by calling the Supabase Auth Admin API, raises 403 if not authorized
 
-Registration and login endpoints are in `app/api/auth.py`, using Supabase Auth API directly via httpx.
+Admin routes use `dependencies=[Depends(get_admin_user)]` to protect them. The `ADMIN_EMAILS` env var is a comma-separated list of authorized emails (configured in `app/config.py` with defaults).
 
-JWT validation is not yet implemented (security.py is empty).
+Registration and login endpoints in `app/api/auth.py` use the Supabase Auth API directly via httpx. The login response includes an `is_admin` flag.
 
 ### API route prefixes
 
@@ -106,7 +89,7 @@ All routes are under `/api/v1/`:
 
 ### Key features
 
-**Game management (jogos):** Admins can add lottery games (exactly 15 numbers from 1-25) to pools via `POST /admin/boloes/{id}/jogos`. Numbers are validated and stored sorted.
+**Game management (jogos):** Admins add lottery games (exactly 15 numbers from 1-25) to pools via `POST /admin/boloes/{id}/jogos`. Numbers are validated and stored sorted.
 
 **Result appraisal (apuração):** Two modes:
 - **Automatic:** `POST /admin/boloes/{id}/apurar/automatico` — fetches drawn numbers from `loteriascaixa-api.herokuapp.com/api/lotofacil/{concurso}` and calculates hits per game
@@ -114,7 +97,7 @@ All routes are under `/api/v1/`:
 
 Both update each game's `acertos` (hit count) and set the pool status to `apurado`.
 
-**Payment flow:** Pix payments go through Mercado Pago. `PagamentoService` creates charges and handles webhook callbacks. In development/sandbox mode, payments are simulated. The webhook endpoint is `/api/v1/pagamentos/webhook/mercadopago`.
+**Payment flow:** Pix payments go through Mercado Pago (`app/services/pagamento_service.py`). In development mode (`ENVIRONMENT=development`), payments are simulated with fake QR codes. In production, real Mercado Pago API calls are made. The webhook endpoint is `/api/v1/pagamentos/webhook/mercadopago`.
 
 ### Supabase tables
 
@@ -135,12 +118,20 @@ Pool statuses: `aberto`, `fechado`, `apurado`, `cancelado`
 - `comprar_cota(p_usuario_id, p_bolao_id, p_quantidade)` — atomic quota purchase (debit wallet, create cota, update pool)
 - `buscar_minhas_cotas(p_usuario_id)` — get user's quotas (SECURITY DEFINER to bypass RLS)
 
-## Environment Setup
+## Environment Setup (Local)
 
 Copy `.env.example` to `.env` and fill in values. Required variables:
 - `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`
 - `SECRET_KEY`
 
-Optional (payments): `MERCADOPAGO_ACCESS_TOKEN`, `MERCADOPAGO_ENV`, `WEBHOOK_URL`
+Optional: `MERCADOPAGO_ACCESS_TOKEN`, `MERCADOPAGO_ENV`, `WEBHOOK_URL`, `CORS_ORIGINS`, `LOG_LEVEL`, `ADMIN_EMAILS`
 
 Frontend dev server runs on port 3000 and proxies `/api` to this backend on port 8000.
+
+## Deployment
+
+**Production**: Render (free tier) — `https://bolao-lotofacil-api.onrender.com`. Free tier sleeps after 15 min inactivity (~30s cold start).
+
+`GET /` health check returns `{"status": "ok"}`. Config: `Procfile` (Render/Heroku), `railway.toml` (unused — Railway trial was unreliable).
+
+Production env vars: `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `SECRET_KEY`, `ENVIRONMENT=production`, `CORS_ORIGINS`, `LOG_LEVEL=INFO`.
