@@ -66,12 +66,11 @@ async def listar_todos_boloes(
     # Calcular campos adicionais para cada bolão
     boloes_response = []
     for bolao in result.data:
-        # Buscar cotas vendidas
-        cotas_result = supabase.table("cotas").select("id").eq("bolao_id", bolao["id"]).execute()
-        cotas_vendidas = len(cotas_result.data) if cotas_result.data else 0
-        
+        # Calcular cotas vendidas a partir dos dados do bolão
+        cotas_vendidas = bolao["total_cotas"] - bolao.get("cotas_disponiveis", bolao["total_cotas"])
+
         # Calcular campos
-        cotas_disponiveis = bolao["total_cotas"] - cotas_vendidas
+        cotas_disponiveis = bolao.get("cotas_disponiveis", bolao["total_cotas"])
         receita_total = cotas_vendidas * bolao["valor_cota"]
         percentual_vendido = (cotas_vendidas / bolao["total_cotas"]) * 100 if bolao["total_cotas"] > 0 else 0
         
@@ -216,10 +215,10 @@ async def atualizar_bolao(
         update_dict["concurso_fim"] = bolao_data.concurso_fim
 
     if bolao_data.total_cotas is not None:
-        # Verificar se não tem mais cotas vendidas do que o novo total
-        cotas_result = supabase.table("cotas").select("id").eq("bolao_id", bolao_id).execute()
-        cotas_vendidas = len(cotas_result.data) if cotas_result.data else 0
-        
+        # Calcular cotas vendidas a partir dos dados do bolão (não contar registros da tabela cotas,
+        # pois cada compra cria 1 registro independente da quantidade de cotas compradas)
+        cotas_vendidas = bolao_atual["total_cotas"] - bolao_atual["cotas_disponiveis"]
+
         if bolao_data.total_cotas < cotas_vendidas:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -261,10 +260,9 @@ async def atualizar_bolao(
     
     bolao_atualizado = result.data[0] if isinstance(result.data, list) else result.data
     
-    # Buscar cotas vendidas para cálculos
-    cotas_result = supabase.table("cotas").select("id").eq("bolao_id", bolao_id).execute()
-    cotas_vendidas = len(cotas_result.data) if cotas_result.data else 0
-    
+    # Calcular cotas vendidas a partir dos dados do bolão
+    cotas_vendidas = bolao_atualizado["total_cotas"] - bolao_atualizado["cotas_disponiveis"]
+
     # Calcular campos
     receita_total = cotas_vendidas * bolao_atualizado["valor_cota"]
     percentual_vendido = (cotas_vendidas / bolao_atualizado["total_cotas"]) * 100 if bolao_atualizado["total_cotas"] > 0 else 0
@@ -360,9 +358,9 @@ async def deletar_bolao(
         )
     
     # Verificar se tem cotas vendidas
-    cotas_result = supabase.table("cotas").select("id").eq("bolao_id", bolao_id).execute()
-    cotas_vendidas = len(cotas_result.data) if cotas_result.data else 0
-    
+    bolao = existing.data[0] if isinstance(existing.data, list) else existing.data
+    cotas_vendidas = bolao["total_cotas"] - bolao.get("cotas_disponiveis", bolao["total_cotas"])
+
     if cotas_vendidas > 0:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
