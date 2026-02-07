@@ -5,6 +5,9 @@ uvicorn==0.32.0
 # HTTP client
 httpx==0.27.2
 
+# Upload de arquivos (multipart/form-data)
+python-multipart==0.0.12
+
 # Validação
 pydantic==2.9.2
 pydantic-settings==2.6.1
