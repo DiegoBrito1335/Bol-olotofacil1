@@ -119,32 +119,46 @@ async def minhas_cotas(
 
         cotas_data = result.data or []
 
-        # Enriquecer com quantidade real (valor_pago / valor_cota)
+        # Enriquecer com quantidade real e prêmios
         if cotas_data:
             bolao_ids = list(set(c["bolao_id"] for c in cotas_data))
-            boloes_result = supabase.table("boloes").select("id, valor_cota").in_("id", bolao_ids).execute()
-            valor_cota_map = {b["id"]: float(b["valor_cota"]) for b in (boloes_result.data or [])}
+            boloes_result = supabase.table("boloes")\
+                .select("id, valor_cota, total_cotas, cotas_disponiveis")\
+                .in_("id", bolao_ids).execute()
+            boloes_map = {b["id"]: b for b in (boloes_result.data or [])}
 
             for cota in cotas_data:
-                vc = valor_cota_map.get(cota["bolao_id"], 0)
+                b = boloes_map.get(cota["bolao_id"], {})
+                vc = float(b.get("valor_cota", 0))
                 cota["quantidade"] = max(1, round(float(cota["valor_pago"]) / vc)) if vc > 0 else 1
 
             # Enriquecer com prêmios ganhos por bolão
-            premios_result = supabase.table("transacoes")\
-                .select("referencia_id, valor")\
-                .eq("usuario_id", current_user["id"])\
-                .eq("origem", "premio_bolao")\
-                .eq("status", "confirmado")\
+            # Usar premiacoes_bolao (mais confiável) + proporção do usuário
+            premiacoes_result = supabase.table("premiacoes_bolao")\
+                .select("bolao_id, premio_total")\
+                .in_("bolao_id", bolao_ids)\
                 .execute()
 
-            premio_por_bolao = {}
-            for t in (premios_result.data or []):
-                bid = t.get("referencia_id")
-                if bid:
-                    premio_por_bolao[bid] = premio_por_bolao.get(bid, 0) + float(t["valor"])
+            premio_total_por_bolao = {}
+            for p in (premiacoes_result.data or []):
+                bid = p["bolao_id"]
+                premio_total_por_bolao[bid] = premio_total_por_bolao.get(bid, 0) + float(p["premio_total"])
 
             for cota in cotas_data:
-                cota["premio_ganho"] = round(premio_por_bolao.get(cota["bolao_id"], 0), 2)
+                bid = cota["bolao_id"]
+                total_premio = premio_total_por_bolao.get(bid, 0)
+                if total_premio > 0:
+                    b = boloes_map.get(bid, {})
+                    total_cotas = b.get("total_cotas", 0)
+                    cotas_disp = b.get("cotas_disponiveis", 0)
+                    vendidas = total_cotas - cotas_disp
+                    user_qtd = cota.get("quantidade", 1)
+                    if vendidas > 0:
+                        cota["premio_ganho"] = round(total_premio * user_qtd / vendidas, 2)
+                    else:
+                        cota["premio_ganho"] = 0
+                else:
+                    cota["premio_ganho"] = 0
 
         return cotas_data
 

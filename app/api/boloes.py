@@ -28,9 +28,9 @@ async def listar_boloes_disponiveis(
     
     # Montar query
     query = supabase.table("boloes").select("*")
-    
+
     if apenas_abertos:
-        query = query.eq("status", "aberto")
+        query = query.in_("status", ["aberto", "fechado"])
     
     # Ordenar por data de criação (mais recentes primeiro)
     query = query.order("created_at", desc=True)
