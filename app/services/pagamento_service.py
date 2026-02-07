@@ -34,11 +34,13 @@ class PagamentoService:
             Dict com dados do pagamento ou None em caso de erro
         """
         
-        # MODO DESENVOLVIMENTO: Gerar Pix simulado
-        if settings.ENVIRONMENT == "development":
+        # Se não tem token do Mercado Pago ou está em dev/sandbox, usa simulado
+        if not settings.MERCADOPAGO_ACCESS_TOKEN or settings.MERCADOPAGO_ENV == "sandbox" or settings.ENVIRONMENT == "development":
+            if not settings.MERCADOPAGO_ACCESS_TOKEN:
+                logger.warning("MERCADOPAGO_ACCESS_TOKEN não configurado - usando modo simulado")
             return await PagamentoService._criar_pix_simulado(usuario_id, valor, descricao)
-        
-        # MODO PRODUÇÃO: Usar Mercado Pago real
+
+        # MODO PRODUÇÃO com token real: Usar Mercado Pago
         return await PagamentoService._criar_pix_mercadopago(usuario_id, valor, descricao)
     
     @staticmethod
