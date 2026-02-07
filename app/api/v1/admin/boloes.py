@@ -2,9 +2,10 @@
 Rotas administrativas para gerenciar bolões
 """
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File
 from typing import List, Optional
 from datetime import datetime
+import io
 
 from app.core.supabase import supabase_admin as supabase
 from app.schemas.bolao import BolaoResponse
@@ -419,6 +420,127 @@ async def adicionar_jogos(bolao_id: str, data: JogosCreateBatchAdmin):
         )
 
     return result.data or []
+
+
+@router.post("/{bolao_id}/jogos/upload-csv", status_code=status.HTTP_201_CREATED)
+async def upload_jogos_csv(bolao_id: str, file: UploadFile = File(...)):
+    """
+    Importa jogos em massa via arquivo CSV.
+    Formato: um jogo por linha, 15 números separados por vírgula ou ponto-e-vírgula.
+    """
+    # Verificar bolão
+    existing = supabase.table("boloes").select("id, status").eq("id", bolao_id).execute()
+
+    if not existing.data:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Bolão não encontrado"
+        )
+
+    bolao = existing.data[0] if isinstance(existing.data, list) else existing.data
+
+    if bolao["status"] == "apurado":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Não é possível adicionar jogos a um bolão já apurado"
+        )
+
+    # Ler conteúdo do arquivo
+    content = await file.read()
+    try:
+        text = content.decode("utf-8")
+    except UnicodeDecodeError:
+        try:
+            text = content.decode("latin-1")
+        except Exception:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Não foi possível ler o arquivo. Use codificação UTF-8 ou Latin-1."
+            )
+
+    linhas = text.strip().splitlines()
+    if not linhas:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Arquivo vazio"
+        )
+
+    # Detectar separador na primeira linha com números
+    separador = ";"  if ";" in linhas[0] else ","
+
+    jogos_validos = []
+    erros = []
+
+    for i, linha in enumerate(linhas, start=1):
+        linha = linha.strip()
+        if not linha:
+            continue
+
+        partes = [p.strip() for p in linha.split(separador)]
+
+        # Verificar se é header (primeira linha com texto não-numérico)
+        if i == 1:
+            tem_texto = any(not p.replace("-", "").isdigit() for p in partes if p)
+            if tem_texto:
+                continue
+
+        # Parsear números
+        numeros = []
+        erro_linha = False
+        for p in partes:
+            if not p:
+                continue
+            try:
+                n = int(p)
+                numeros.append(n)
+            except ValueError:
+                erros.append(f"Linha {i}: valor não numérico '{p}'")
+                erro_linha = True
+                break
+
+        if erro_linha:
+            continue
+
+        # Validações
+        if len(numeros) != 15:
+            erros.append(f"Linha {i}: {len(numeros)} números (esperado 15)")
+            continue
+
+        fora_range = [n for n in numeros if n < 1 or n > 25]
+        if fora_range:
+            erros.append(f"Linha {i}: números fora do range 1-25: {fora_range}")
+            continue
+
+        if len(set(numeros)) != 15:
+            erros.append(f"Linha {i}: números duplicados")
+            continue
+
+        jogos_validos.append(sorted(numeros))
+
+    if not jogos_validos:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Nenhum jogo válido encontrado. Erros: {'; '.join(erros) if erros else 'arquivo sem dados'}"
+        )
+
+    # Batch insert
+    jogos_insert = [
+        {"bolao_id": bolao_id, "dezenas": dezenas}
+        for dezenas in jogos_validos
+    ]
+
+    result = supabase.table("jogos_bolao").insert(jogos_insert).execute()
+
+    if result.error:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Erro ao inserir jogos: {result.error}"
+        )
+
+    return {
+        "total_importados": len(jogos_validos),
+        "erros": erros,
+    }
 
 
 @router.delete("/{bolao_id}/jogos/{jogo_id}")
