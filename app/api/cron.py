@@ -1,5 +1,7 @@
 """
-Endpoint para auto-apuração via cron externo (ex: cron-job.org).
+Endpoints de cron para tarefas automáticas via cron externo (ex: cron-job.org).
+- Fechar bolões abertos às 20:55
+- Apurar resultados pendentes
 Protegido por SECRET_KEY no header.
 """
 
@@ -79,4 +81,51 @@ async def cron_apurar_resultados(x_cron_secret: str = Header(...)):
         "mensagem": f"{len(resultados)} bolões processados",
         "boloes_processados": len(resultados),
         "resultados": resultados,
+    }
+
+
+@router.post("/fechar-boloes")
+async def cron_fechar_boloes(x_cron_secret: str = Header(...)):
+    """
+    Fecha todos os bolões com status 'aberto'.
+    Deve ser chamado às 20:55 para impedir compras em cima da hora.
+    Protegido por header X-Cron-Secret = SECRET_KEY.
+    """
+    if x_cron_secret != settings.SECRET_KEY:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Secret inválido"
+        )
+
+    # Buscar todos os bolões abertos
+    boloes_result = supabase.table("boloes")\
+        .select("id, nome")\
+        .eq("status", "aberto")\
+        .execute()
+
+    boloes = boloes_result.data or []
+
+    if not boloes:
+        return {
+            "mensagem": "Nenhum bolão aberto para fechar",
+            "boloes_fechados": 0,
+        }
+
+    fechados = []
+
+    for bolao in boloes:
+        try:
+            supabase.table("boloes")\
+                .update({"status": "fechado"})\
+                .eq("id", bolao["id"])\
+                .execute()
+            fechados.append({"bolao_id": bolao["id"], "nome": bolao["nome"]})
+            logger.info(f"Cron: fechou bolão '{bolao['nome']}' (ID: {bolao['id']})")
+        except Exception as e:
+            logger.error(f"Cron: erro ao fechar bolão {bolao['id']}: {e}")
+
+    return {
+        "mensagem": f"{len(fechados)} bolões fechados",
+        "boloes_fechados": len(fechados),
+        "boloes": fechados,
     }
