@@ -12,6 +12,7 @@ from app.api import carteira
 from app.api import boloes
 from app.api import pagamentos
 from app.api import cotas
+from app.api import perfil
 
 # ====================================
 # IMPORTS DAS ROTAS ADMIN
@@ -86,6 +87,12 @@ app.include_router(
     pagamentos.router,
     prefix="/api/v1/pagamentos",
     tags=["Pagamentos"]
+)
+
+app.include_router(
+    perfil.router,
+    prefix="/api/v1/perfil",
+    tags=["Perfil"]
 )
 
 # ====================================
