@@ -115,9 +115,14 @@ class ResultadoService:
             }).execute()
             return 0.0
 
-        # Buscar cotas vendidas agrupadas por usuário
+        # Buscar dados do bolão (nome e valor_cota para calcular quantidade real)
+        bolao_result = supabase.table("boloes").select("nome, valor_cota").eq("id", bolao_id).execute()
+        bolao_nome = bolao_result.data[0]["nome"] if bolao_result.data else "Bolão"
+        valor_cota = float(bolao_result.data[0]["valor_cota"]) if bolao_result.data else 0
+
+        # Buscar cotas vendidas com valor_pago
         cotas_result = supabase.table("cotas")\
-            .select("usuario_id")\
+            .select("usuario_id, valor_pago")\
             .eq("bolao_id", bolao_id)\
             .execute()
 
@@ -132,17 +137,17 @@ class ResultadoService:
             }).execute()
             return premio_total
 
-        # Contar cotas por usuário
+        # Contar cotas REAIS por usuário (valor_pago / valor_cota)
         cotas_por_usuario: Dict[str, int] = {}
         for cota in cotas:
             uid = cota["usuario_id"]
-            cotas_por_usuario[uid] = cotas_por_usuario.get(uid, 0) + 1
+            if valor_cota > 0:
+                qtd = max(1, round(float(cota["valor_pago"]) / valor_cota))
+            else:
+                qtd = 1
+            cotas_por_usuario[uid] = cotas_por_usuario.get(uid, 0) + qtd
 
         total_cotas = sum(cotas_por_usuario.values())
-
-        # Buscar nome do bolão para descrição da transação
-        bolao_result = supabase.table("boloes").select("nome").eq("id", bolao_id).execute()
-        bolao_nome = bolao_result.data[0]["nome"] if bolao_result.data else "Bolão"
 
         # Distribuir para cada usuário
         for usuario_id, qtd_cotas in cotas_por_usuario.items():

@@ -100,7 +100,19 @@ async def minhas_cotas(
                 detail=f"Erro ao buscar cotas: {result.error}"
             )
 
-        return result.data or []
+        cotas_data = result.data or []
+
+        # Enriquecer com quantidade real (valor_pago / valor_cota)
+        if cotas_data:
+            bolao_ids = list(set(c["bolao_id"] for c in cotas_data))
+            boloes_result = supabase.table("boloes").select("id, valor_cota").in_("id", bolao_ids).execute()
+            valor_cota_map = {b["id"]: float(b["valor_cota"]) for b in (boloes_result.data or [])}
+
+            for cota in cotas_data:
+                vc = valor_cota_map.get(cota["bolao_id"], 0)
+                cota["quantidade"] = max(1, round(float(cota["valor_pago"]) / vc)) if vc > 0 else 1
+
+        return cotas_data
 
     except HTTPException:
         raise
