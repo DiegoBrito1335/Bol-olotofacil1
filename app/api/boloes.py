@@ -169,6 +169,87 @@ async def criar_bolao_via_public(bolao_data: BolaoCreateAdmin):
 
 
 # ===================================
+# VER RESULTADO / PREMIAÇÃO
+# ===================================
+
+@router.get("/{bolao_id}/resultado")
+async def ver_resultado_publico(bolao_id: str):
+    """
+    Ver resultado e premiação de um bolão (público).
+    Retorna resultado por concurso com prêmio distribuído.
+    """
+    bolao_result = supabase.table("boloes").select("*").eq("id", bolao_id).execute()
+
+    if not bolao_result.data:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Bolão não encontrado"
+        )
+
+    bolao = bolao_result.data[0] if isinstance(bolao_result.data, list) else bolao_result.data
+    is_teimosinha = bolao.get("concurso_fim") and bolao["concurso_fim"] > bolao["concurso_numero"]
+
+    if is_teimosinha:
+        # Buscar resultados por concurso
+        resultados_result = supabase.table("resultados_concurso")\
+            .select("concurso_numero, dezenas")\
+            .eq("bolao_id", bolao_id)\
+            .order("concurso_numero")\
+            .execute()
+
+        # Buscar premiações
+        premiacoes_result = supabase.table("premiacoes_bolao")\
+            .select("concurso_numero, premio_total")\
+            .eq("bolao_id", bolao_id)\
+            .execute()
+        premiacoes_map = {p["concurso_numero"]: float(p["premio_total"]) for p in (premiacoes_result.data or [])}
+
+        resultados = []
+        for r in (resultados_result.data or []):
+            resultados.append({
+                "concurso_numero": r["concurso_numero"],
+                "dezenas": r["dezenas"],
+                "premio_total": premiacoes_map.get(r["concurso_numero"], 0),
+            })
+
+        premio_total_geral = sum(premiacoes_map.values())
+
+        return {
+            "bolao_id": bolao_id,
+            "teimosinha": True,
+            "concurso_numero": bolao["concurso_numero"],
+            "concurso_fim": bolao["concurso_fim"],
+            "total_concursos": bolao["concurso_fim"] - bolao["concurso_numero"] + 1,
+            "concursos_apurados": len(resultados),
+            "premio_total_geral": round(premio_total_geral, 2),
+            "resultados": resultados,
+        }
+
+    # Concurso único
+    if not bolao.get("resultado_dezenas"):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Este bolão ainda não foi apurado"
+        )
+
+    # Buscar premiação
+    premiacoes_result = supabase.table("premiacoes_bolao")\
+        .select("premio_total")\
+        .eq("bolao_id", bolao_id)\
+        .eq("concurso_numero", bolao["concurso_numero"])\
+        .execute()
+    premio_total = float(premiacoes_result.data[0]["premio_total"]) if premiacoes_result.data else 0
+
+    return {
+        "bolao_id": bolao_id,
+        "teimosinha": False,
+        "concurso_numero": bolao["concurso_numero"],
+        "resultado_dezenas": bolao["resultado_dezenas"],
+        "premio_total": round(premio_total, 2),
+    }
+
+
+# ===================================
 # VERIFICAR DISPONIBILIDADE
 # ===================================
 

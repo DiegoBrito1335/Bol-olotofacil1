@@ -568,6 +568,126 @@ async def apurar_bolao_automatico(bolao_id: str):
     return resultado_apuracao
 
 
+@router.post("/{bolao_id}/apurar/concurso/{concurso_numero}")
+async def apurar_concurso_individual(bolao_id: str, concurso_numero: int):
+    """
+    Apura um concurso específico de um bolão teimosinha via API.
+    Busca resultado + premiações e distribui prêmio automaticamente.
+    """
+    # Verificar bolão
+    existing = supabase.table("boloes").select("*").eq("id", bolao_id).execute()
+
+    if not existing.data:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Bolão não encontrado"
+        )
+
+    bolao = existing.data[0] if isinstance(existing.data, list) else existing.data
+
+    if bolao["status"] == "apurado":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Este bolão já foi totalmente apurado"
+        )
+
+    # Verificar se tem jogos
+    jogos_result = supabase.table("jogos_bolao").select("id").eq("bolao_id", bolao_id).execute()
+    if not jogos_result.data:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Este bolão não possui jogos cadastrados"
+        )
+
+    # Validar concurso no range do bolão
+    if BolaoService.is_teimosinha(bolao):
+        concursos = BolaoService.concursos_list(bolao)
+        if concurso_numero not in concursos:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Concurso {concurso_numero} não pertence a este bolão (range: {concursos[0]}-{concursos[-1]})"
+            )
+    else:
+        if concurso_numero != bolao["concurso_numero"]:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Este bolão é do concurso {bolao['concurso_numero']}"
+            )
+
+    # Verificar se já foi apurado
+    ja_apurado = supabase.table("resultados_concurso")\
+        .select("id")\
+        .eq("bolao_id", bolao_id)\
+        .eq("concurso_numero", concurso_numero)\
+        .execute()
+
+    if ja_apurado.data:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Concurso {concurso_numero} já foi apurado"
+        )
+
+    # Buscar resultado completo (dezenas + premiações)
+    resultado_completo = await ResultadoService.buscar_resultado_completo(concurso_numero)
+    if not resultado_completo:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Resultado do concurso {concurso_numero} ainda não disponível na API"
+        )
+
+    # Apurar
+    resultado = await ResultadoService.apurar_concurso(
+        bolao_id, concurso_numero,
+        resultado_completo["dezenas"],
+        resultado_completo.get("premiacoes", {})
+    )
+
+    # Verificar se todos foram apurados
+    if BolaoService.is_teimosinha(bolao):
+        total = BolaoService.total_concursos(bolao)
+        bolao_atualizado = supabase.table("boloes").select("concursos_apurados").eq("id", bolao_id).execute()
+        apurados = bolao_atualizado.data[0]["concursos_apurados"] if bolao_atualizado.data else 0
+        if apurados >= total:
+            supabase.table("boloes").update({"status": "apurado"}).eq("id", bolao_id).execute()
+
+    return resultado
+
+
+@router.post("/{bolao_id}/apurar/pendentes")
+async def apurar_pendentes(bolao_id: str):
+    """
+    Apura todos os concursos pendentes de um bolão.
+    Usado pelo auto-check ao abrir a página e pelo cron.
+    """
+    existing = supabase.table("boloes").select("*").eq("id", bolao_id).execute()
+
+    if not existing.data:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Bolão não encontrado"
+        )
+
+    bolao = existing.data[0] if isinstance(existing.data, list) else existing.data
+
+    if bolao["status"] == "apurado":
+        return {
+            "bolao_id": bolao_id,
+            "mensagem": "Bolão já está totalmente apurado",
+            "novos_apurados": 0,
+        }
+
+    # Verificar se tem jogos
+    jogos_result = supabase.table("jogos_bolao").select("id").eq("bolao_id", bolao_id).execute()
+    if not jogos_result.data:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Este bolão não possui jogos cadastrados"
+        )
+
+    resultado = await ResultadoService.apurar_pendentes(bolao_id)
+    return resultado
+
+
 @router.get("/{bolao_id}/apuracao/status")
 async def status_apuracao(bolao_id: str):
     """
@@ -599,10 +719,29 @@ async def status_apuracao(bolao_id: str):
         .execute()
     concursos_apurados = {r["concurso_numero"] for r in (apurados_result.data or [])}
 
+    # Buscar premiações
+    premiacoes_result = supabase.table("premiacoes_bolao")\
+        .select("concurso_numero, premio_total, distribuido")\
+        .eq("bolao_id", bolao_id)\
+        .execute()
+    premiacoes_map = {}
+    for p in (premiacoes_result.data or []):
+        premiacoes_map[p["concurso_numero"]] = {
+            "premio_total": float(p["premio_total"]),
+            "distribuido": p["distribuido"],
+        }
+
     status_concursos = [
-        {"concurso_numero": c, "apurado": c in concursos_apurados}
+        {
+            "concurso_numero": c,
+            "apurado": c in concursos_apurados,
+            "premio_total": premiacoes_map.get(c, {}).get("premio_total", 0),
+            "distribuido": premiacoes_map.get(c, {}).get("distribuido", False),
+        }
         for c in concursos
     ]
+
+    premio_total_geral = sum(p.get("premio_total", 0) for p in premiacoes_map.values())
 
     return {
         "teimosinha": True,
@@ -610,6 +749,7 @@ async def status_apuracao(bolao_id: str):
         "concurso_fim": bolao["concurso_fim"],
         "total_concursos": len(concursos),
         "concursos_apurados": len(concursos_apurados),
+        "premio_total_geral": round(premio_total_geral, 2),
         "concursos": status_concursos,
     }
 

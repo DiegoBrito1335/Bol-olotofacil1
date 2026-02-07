@@ -36,19 +36,180 @@ class ResultadoService:
         return None
 
     @staticmethod
+    async def buscar_resultado_completo(concurso_numero: int) -> Optional[Dict[str, Any]]:
+        """
+        Busca resultado completo da Lotofácil via API pública.
+        Retorna {dezenas: [...], premiacoes: {11: valor, 12: valor, ...}} ou None.
+        """
+        url = f"https://loteriascaixa-api.herokuapp.com/api/lotofacil/{concurso_numero}"
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.get(url, timeout=10.0)
+                if response.status_code == 200:
+                    data = response.json()
+                    dezenas = [int(d) for d in data.get("dezenas", [])]
+                    if len(dezenas) != 15:
+                        logger.warning(f"API retornou {len(dezenas)} dezenas para concurso {concurso_numero}")
+                        return None
+
+                    # Extrair premiações por faixa de acertos
+                    premiacoes_raw = data.get("premiacoes", [])
+                    premiacoes = {}
+                    for p in premiacoes_raw:
+                        faixa = p.get("faixa", 0)
+                        valor = p.get("valorPremio", 0)
+                        # faixa 1 = 15 acertos, faixa 2 = 14 acertos, etc.
+                        acertos = 16 - faixa
+                        if 11 <= acertos <= 15:
+                            premiacoes[acertos] = float(valor) if valor else 0.0
+
+                    return {
+                        "dezenas": sorted(dezenas),
+                        "premiacoes": premiacoes,
+                    }
+                else:
+                    logger.warning(f"API retornou status {response.status_code} para concurso {concurso_numero}")
+        except Exception as e:
+            logger.error(f"Erro ao buscar resultado completo do concurso {concurso_numero}: {e}")
+        return None
+
+    @staticmethod
     def calcular_acertos(jogo_dezenas: List[int], resultado_dezenas: List[int]) -> int:
         """Calcula quantos números o jogo acertou."""
         return len(set(jogo_dezenas) & set(resultado_dezenas))
 
+    # ===================================
+    # DISTRIBUIÇÃO DE PRÊMIOS
+    # ===================================
+
+    @staticmethod
+    async def calcular_e_distribuir_premio(
+        bolao_id: str,
+        concurso_numero: int,
+        premiacoes: Dict[int, float],
+        jogos_resultado: List[Dict[str, Any]],
+    ) -> float:
+        """
+        Calcula e distribui prêmios para os participantes do bolão.
+
+        1. Para cada jogo com >=11 acertos, soma o premio da faixa
+        2. Divide o total proporcionalmente pelas cotas vendidas
+        3. Credita na carteira de cada participante
+
+        Retorna o premio_total distribuído.
+        """
+        # Calcular prêmio total do bolão neste concurso
+        premio_total = 0.0
+        for jogo in jogos_resultado:
+            acertos = jogo["acertos"]
+            if acertos >= 11 and acertos in premiacoes:
+                premio_total += premiacoes[acertos]
+
+        if premio_total <= 0:
+            # Registrar premiação zerada
+            supabase.table("premiacoes_bolao").insert({
+                "bolao_id": bolao_id,
+                "concurso_numero": concurso_numero,
+                "premio_total": 0,
+                "distribuido": True,
+            }).execute()
+            return 0.0
+
+        # Buscar cotas vendidas agrupadas por usuário
+        cotas_result = supabase.table("cotas")\
+            .select("usuario_id")\
+            .eq("bolao_id", bolao_id)\
+            .execute()
+
+        cotas = cotas_result.data or []
+        if not cotas:
+            logger.warning(f"Bolão {bolao_id} sem cotas vendidas para distribuir prêmio")
+            supabase.table("premiacoes_bolao").insert({
+                "bolao_id": bolao_id,
+                "concurso_numero": concurso_numero,
+                "premio_total": round(premio_total, 2),
+                "distribuido": False,
+            }).execute()
+            return premio_total
+
+        # Contar cotas por usuário
+        cotas_por_usuario: Dict[str, int] = {}
+        for cota in cotas:
+            uid = cota["usuario_id"]
+            cotas_por_usuario[uid] = cotas_por_usuario.get(uid, 0) + 1
+
+        total_cotas = sum(cotas_por_usuario.values())
+
+        # Buscar nome do bolão para descrição da transação
+        bolao_result = supabase.table("boloes").select("nome").eq("id", bolao_id).execute()
+        bolao_nome = bolao_result.data[0]["nome"] if bolao_result.data else "Bolão"
+
+        # Distribuir para cada usuário
+        for usuario_id, qtd_cotas in cotas_por_usuario.items():
+            premio_usuario = round((qtd_cotas / total_cotas) * premio_total, 2)
+            if premio_usuario <= 0:
+                continue
+
+            # Buscar carteira do usuário
+            cart_result = supabase.table("carteira")\
+                .select("*")\
+                .eq("usuario_id", usuario_id)\
+                .execute()
+
+            if not cart_result.data:
+                logger.warning(f"Carteira não encontrada para usuário {usuario_id}")
+                continue
+
+            carteira = cart_result.data[0]
+            saldo_anterior = float(carteira["saldo_disponivel"])
+            saldo_posterior = round(saldo_anterior + premio_usuario, 2)
+
+            # Atualizar saldo
+            supabase.table("carteira")\
+                .update({"saldo_disponivel": saldo_posterior})\
+                .eq("usuario_id", usuario_id)\
+                .execute()
+
+            # Criar transação
+            supabase.table("transacoes").insert({
+                "usuario_id": usuario_id,
+                "tipo": "credito",
+                "valor": premio_usuario,
+                "origem": "premio_bolao",
+                "referencia_id": bolao_id,
+                "descricao": f"Prêmio {bolao_nome} - Concurso {concurso_numero} ({qtd_cotas} cota{'s' if qtd_cotas > 1 else ''})",
+                "saldo_anterior": saldo_anterior,
+                "saldo_posterior": saldo_posterior,
+                "status": "confirmado",
+            }).execute()
+
+            logger.info(f"Prêmio R$ {premio_usuario} creditado para usuário {usuario_id} (concurso {concurso_numero})")
+
+        # Registrar premiação
+        supabase.table("premiacoes_bolao").insert({
+            "bolao_id": bolao_id,
+            "concurso_numero": concurso_numero,
+            "premio_total": round(premio_total, 2),
+            "distribuido": True,
+        }).execute()
+
+        logger.info(f"Prêmio total R$ {premio_total:.2f} distribuído para bolão {bolao_id} concurso {concurso_numero}")
+        return premio_total
+
+    # ===================================
+    # APURAÇÃO CONCURSO ÚNICO
+    # ===================================
+
     @staticmethod
     async def apurar_bolao(bolao_id: str, resultado_dezenas: List[int]) -> Dict[str, Any]:
         """
-        Realiza a apuração de um bolão:
+        Realiza a apuração de um bolão (concurso único):
         1. Busca todos os jogos do bolão
         2. Calcula acertos de cada jogo
         3. Atualiza cada jogo com o número de acertos
         4. Salva resultado_dezenas no bolão e muda status para "apurado"
-        5. Retorna resumo
+        5. Distribui prêmio se houver
+        6. Retorna resumo
         """
         # Buscar jogos do bolão
         jogos_result = supabase.table("jogos_bolao")\
@@ -106,12 +267,21 @@ class ResultadoService:
             .execute()
         concurso = bolao_result.data[0]["concurso_numero"] if bolao_result.data else 0
 
+        # Buscar premiação e distribuir
+        premio_total = 0.0
+        resultado_completo = await ResultadoService.buscar_resultado_completo(concurso)
+        if resultado_completo and resultado_completo.get("premiacoes"):
+            premio_total = await ResultadoService.calcular_e_distribuir_premio(
+                bolao_id, concurso, resultado_completo["premiacoes"], jogos_resultado
+            )
+
         return {
             "bolao_id": bolao_id,
             "concurso_numero": concurso,
             "resultado_dezenas": resultado_dezenas,
             "jogos_resultado": jogos_resultado,
             "resumo": resumo,
+            "premio_total": round(premio_total, 2),
         }
 
     # ===================================
@@ -119,7 +289,7 @@ class ResultadoService:
     # ===================================
 
     @staticmethod
-    async def apurar_concurso(bolao_id: str, concurso_numero: int, resultado_dezenas: List[int]) -> Dict[str, Any]:
+    async def apurar_concurso(bolao_id: str, concurso_numero: int, resultado_dezenas: List[int], premiacoes: Optional[Dict[int, float]] = None) -> Dict[str, Any]:
         """
         Apura um concurso específico de um bolão teimosinha:
         1. Busca todos os jogos do bolão
@@ -127,6 +297,7 @@ class ResultadoService:
         3. Insere em resultados_concurso
         4. Insere em acertos_concurso
         5. Incrementa concursos_apurados no bolão
+        6. Distribui prêmio se houver
         """
         # Buscar jogos do bolão
         jogos_result = supabase.table("jogos_bolao")\
@@ -178,11 +349,25 @@ class ResultadoService:
             .eq("id", bolao_id)\
             .execute()
 
+        # Distribuir prêmio
+        premio_total = 0.0
+        if premiacoes is None:
+            # Buscar premiação da API
+            resultado_completo = await ResultadoService.buscar_resultado_completo(concurso_numero)
+            if resultado_completo:
+                premiacoes = resultado_completo.get("premiacoes", {})
+
+        if premiacoes:
+            premio_total = await ResultadoService.calcular_e_distribuir_premio(
+                bolao_id, concurso_numero, premiacoes, jogos_resultado
+            )
+
         return {
             "concurso_numero": concurso_numero,
             "dezenas": resultado_dezenas,
             "jogos_resultado": jogos_resultado,
             "resumo": resumo,
+            "premio_total": round(premio_total, 2),
         }
 
     @staticmethod
@@ -220,17 +405,23 @@ class ResultadoService:
 
         resultados = []
         erros = []
+        premio_total_geral = 0.0
 
         for concurso in concursos_pendentes:
-            # Buscar resultado da API
-            dezenas = await ResultadoService.buscar_resultado_api(concurso)
-            if not dezenas:
+            # Buscar resultado completo da API (com premiações)
+            resultado_completo = await ResultadoService.buscar_resultado_completo(concurso)
+            if not resultado_completo:
                 erros.append(f"Concurso {concurso}: resultado não disponível")
                 continue
 
-            # Apurar este concurso
-            resultado = await ResultadoService.apurar_concurso(bolao_id, concurso, dezenas)
+            # Apurar este concurso com premiações
+            resultado = await ResultadoService.apurar_concurso(
+                bolao_id, concurso,
+                resultado_completo["dezenas"],
+                resultado_completo.get("premiacoes", {})
+            )
             resultados.append(resultado)
+            premio_total_geral += resultado.get("premio_total", 0)
 
         # Verificar se todos os concursos foram apurados
         total_concursos = BolaoService.total_concursos(bolao)
@@ -252,7 +443,16 @@ class ResultadoService:
             "concursos_apurados": apurados,
             "resultados": resultados,
             "erros": erros,
+            "premio_total_geral": round(premio_total_geral, 2),
         }
+
+    @staticmethod
+    async def apurar_pendentes(bolao_id: str) -> Dict[str, Any]:
+        """
+        Apura apenas os concursos pendentes de um bolão.
+        Usado pelo auto-check (cron + page load).
+        """
+        return await ResultadoService.apurar_todos_concursos(bolao_id)
 
     @staticmethod
     async def get_resultados_teimosinha(bolao_id: str) -> List[Dict]:
@@ -268,6 +468,16 @@ class ResultadoService:
     async def get_acertos_por_concurso(bolao_id: str) -> List[Dict]:
         """Retorna todos os acertos por jogo por concurso."""
         result = supabase.table("acertos_concurso")\
+            .select("*")\
+            .eq("bolao_id", bolao_id)\
+            .order("concurso_numero")\
+            .execute()
+        return result.data or []
+
+    @staticmethod
+    async def get_premiacoes_bolao(bolao_id: str) -> List[Dict]:
+        """Retorna premiações distribuídas por concurso."""
+        result = supabase.table("premiacoes_bolao")\
             .select("*")\
             .eq("bolao_id", bolao_id)\
             .order("concurso_numero")\
