@@ -96,25 +96,6 @@ async def criar_bolao(
     Cria um novo bolão (admin).
     """
     
-    # Verificar se já existe bolão com mesmo concurso e status aberto
-    existing = supabase.table("boloes")\
-        .select("id")\
-        .eq("concurso_numero", bolao_data.concurso_numero)\
-        .eq("status", "aberto")\
-        .execute()
-    
-    if existing.error:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Erro ao verificar bolão existente: {existing.error}"
-        )
-    
-    if existing.data:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Já existe um bolão aberto para o concurso {bolao_data.concurso_numero}"
-        )
-    
     # Preparar dados
     bolao_dict = {
         "nome": bolao_data.nome,
