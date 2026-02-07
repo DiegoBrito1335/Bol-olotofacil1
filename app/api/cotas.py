@@ -112,6 +112,23 @@ async def minhas_cotas(
                 vc = valor_cota_map.get(cota["bolao_id"], 0)
                 cota["quantidade"] = max(1, round(float(cota["valor_pago"]) / vc)) if vc > 0 else 1
 
+            # Enriquecer com prêmios ganhos por bolão
+            premios_result = supabase.table("transacoes")\
+                .select("referencia_id, valor")\
+                .eq("usuario_id", current_user["id"])\
+                .eq("origem", "premio_bolao")\
+                .eq("status", "confirmado")\
+                .execute()
+
+            premio_por_bolao = {}
+            for t in (premios_result.data or []):
+                bid = t.get("referencia_id")
+                if bid:
+                    premio_por_bolao[bid] = premio_por_bolao.get(bid, 0) + float(t["valor"])
+
+            for cota in cotas_data:
+                cota["premio_ganho"] = round(premio_por_bolao.get(cota["bolao_id"], 0), 2)
+
         return cotas_data
 
     except HTTPException:
