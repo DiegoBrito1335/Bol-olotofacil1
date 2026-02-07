@@ -30,8 +30,8 @@ class BolaoCreateAdmin(BaseModel):
             concurso_numero = info.data.get('concurso_numero')
             if concurso_numero and v <= concurso_numero:
                 raise ValueError('concurso_fim deve ser maior que concurso_numero')
-            if concurso_numero and (v - concurso_numero + 1) > 12:
-                raise ValueError('Teimosinha suporta no máximo 12 concursos')
+            if concurso_numero and (v - concurso_numero + 1) > 999:
+                raise ValueError('Teimosinha suporta no máximo 999 concursos')
         return v
 
 
