@@ -4,6 +4,7 @@ Rotas de compra de cotas
 
 from fastapi import APIRouter, HTTPException, Depends, status
 from pydantic import BaseModel
+from typing import Dict
 from app.core.supabase import supabase_admin as supabase
 from app.api.deps import get_current_user
 import logging
@@ -166,6 +167,190 @@ async def minhas_cotas(
         raise
     except Exception as e:
         logger.error(f"Erro em /minhas: {traceback.format_exc()}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Erro interno: {str(e)}"
+        )
+
+
+@router.get("/meus-resultados")
+async def meus_resultados(
+    current_user = Depends(get_current_user)
+):
+    """
+    Retorna resultados dos bolões em que o usuário participou.
+    Inclui dezenas sorteadas, jogos com acertos e prêmios.
+    """
+
+    try:
+        # 1. Buscar cotas do usuário
+        cotas_result = supabase.rpc(
+            "buscar_minhas_cotas",
+            {"p_usuario_id": current_user["id"]}
+        ).execute()
+
+        if cotas_result.error:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Erro ao buscar cotas: {cotas_result.error}"
+            )
+
+        cotas_data = cotas_result.data or []
+        if not cotas_data:
+            return []
+
+        # Filtrar apenas bolões apurados
+        bolao_ids_apurados = list(set(
+            c["bolao_id"] for c in cotas_data
+            if c.get("bolao_status") == "apurado"
+        ))
+
+        if not bolao_ids_apurados:
+            return []
+
+        # 2. Buscar dados dos bolões
+        boloes_result = supabase.table("boloes")\
+            .select("id, nome, concurso_numero, concurso_fim, status, resultado_dezenas, total_cotas, cotas_disponiveis, valor_cota")\
+            .in_("id", bolao_ids_apurados)\
+            .execute()
+        boloes_map = {b["id"]: b for b in (boloes_result.data or [])}
+
+        # 3. Buscar jogos de todos os bolões
+        jogos_result = supabase.table("jogos_bolao")\
+            .select("id, bolao_id, dezenas, acertos")\
+            .in_("bolao_id", bolao_ids_apurados)\
+            .execute()
+
+        jogos_por_bolao: Dict[str, list] = {}
+        for j in (jogos_result.data or []):
+            bid = j["bolao_id"]
+            jogos_por_bolao.setdefault(bid, []).append(j)
+
+        # 4. Buscar resultados_concurso (teimosinha)
+        resultados_result = supabase.table("resultados_concurso")\
+            .select("bolao_id, concurso_numero, dezenas")\
+            .in_("bolao_id", bolao_ids_apurados)\
+            .order("concurso_numero")\
+            .execute()
+
+        resultados_por_bolao: Dict[str, list] = {}
+        for r in (resultados_result.data or []):
+            bid = r["bolao_id"]
+            resultados_por_bolao.setdefault(bid, []).append(r)
+
+        # 5. Buscar acertos_concurso (teimosinha - acertos por jogo por concurso)
+        acertos_result = supabase.table("acertos_concurso")\
+            .select("bolao_id, concurso_numero, jogo_id, acertos")\
+            .in_("bolao_id", bolao_ids_apurados)\
+            .execute()
+
+        acertos_map: Dict[str, Dict[int, Dict[str, int]]] = {}
+        for a in (acertos_result.data or []):
+            bid = a["bolao_id"]
+            cn = a["concurso_numero"]
+            jid = a["jogo_id"]
+            acertos_map.setdefault(bid, {}).setdefault(cn, {})[jid] = a["acertos"]
+
+        # 6. Buscar premiações
+        premiacoes_result = supabase.table("premiacoes_bolao")\
+            .select("bolao_id, concurso_numero, premio_total")\
+            .in_("bolao_id", bolao_ids_apurados)\
+            .execute()
+
+        premiacoes_map: Dict[str, Dict[int, float]] = {}
+        premio_total_por_bolao: Dict[str, float] = {}
+        for p in (premiacoes_result.data or []):
+            bid = p["bolao_id"]
+            cn = p["concurso_numero"]
+            val = float(p["premio_total"])
+            premiacoes_map.setdefault(bid, {})[cn] = val
+            premio_total_por_bolao[bid] = premio_total_por_bolao.get(bid, 0) + val
+
+        # 7. Montar resposta
+        response = []
+
+        for cota in cotas_data:
+            bid = cota["bolao_id"]
+            if bid not in boloes_map:
+                continue
+
+            bolao = boloes_map[bid]
+            is_teimosinha = bolao.get("concurso_fim") and bolao["concurso_fim"] > bolao["concurso_numero"]
+
+            # Calcular quantidade de cotas do usuário
+            vc = float(bolao.get("valor_cota", 0))
+            user_qtd = max(1, round(float(cota["valor_pago"]) / vc)) if vc > 0 else 1
+
+            # Calcular prêmio do usuário (proporcional)
+            total_premio = premio_total_por_bolao.get(bid, 0)
+            vendidas = bolao["total_cotas"] - bolao["cotas_disponiveis"]
+            if vendidas > 0 and total_premio > 0:
+                premio_usuario = round(total_premio * user_qtd / vendidas, 2)
+            else:
+                premio_usuario = 0
+
+            # Montar resultados por concurso
+            resultados_list = []
+            jogos_bolao = jogos_por_bolao.get(bid, [])
+
+            if is_teimosinha:
+                # Teimosinha: múltiplos concursos
+                for res in resultados_por_bolao.get(bid, []):
+                    cn = res["concurso_numero"]
+                    acertos_cn = acertos_map.get(bid, {}).get(cn, {})
+
+                    jogos_com_acertos = []
+                    for j in jogos_bolao:
+                        jogos_com_acertos.append({
+                            "dezenas": sorted(j["dezenas"]),
+                            "acertos": acertos_cn.get(j["id"], 0)
+                        })
+
+                    resultados_list.append({
+                        "concurso_numero": cn,
+                        "dezenas_sorteadas": sorted(res["dezenas"]),
+                        "premio_total": premiacoes_map.get(bid, {}).get(cn, 0),
+                        "jogos": jogos_com_acertos,
+                    })
+            else:
+                # Concurso único
+                dezenas_resultado = bolao.get("resultado_dezenas")
+                if dezenas_resultado:
+                    resultado_set = set(dezenas_resultado)
+                    jogos_com_acertos = []
+                    for j in jogos_bolao:
+                        acertos = len(set(j["dezenas"]) & resultado_set)
+                        jogos_com_acertos.append({
+                            "dezenas": sorted(j["dezenas"]),
+                            "acertos": acertos
+                        })
+
+                    cn = bolao["concurso_numero"]
+                    resultados_list.append({
+                        "concurso_numero": cn,
+                        "dezenas_sorteadas": sorted(dezenas_resultado),
+                        "premio_total": premiacoes_map.get(bid, {}).get(cn, 0),
+                        "jogos": jogos_com_acertos,
+                    })
+
+            if resultados_list:
+                response.append({
+                    "bolao_id": bid,
+                    "bolao_nome": bolao["nome"],
+                    "concurso_numero": bolao["concurso_numero"],
+                    "concurso_fim": bolao.get("concurso_fim"),
+                    "status": bolao["status"],
+                    "resultados": resultados_list,
+                    "premio_usuario": premio_usuario,
+                    "quantidade_cotas": user_qtd,
+                })
+
+        return response
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Erro em /meus-resultados: {traceback.format_exc()}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Erro interno: {str(e)}"
