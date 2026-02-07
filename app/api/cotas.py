@@ -65,6 +65,23 @@ async def comprar_cota(
             detail=resultado.get("mensagem", "Erro ao comprar cota")
         )
 
+    # Auto-fechar bolão se todas as cotas foram vendidas
+    try:
+        bolao_check = supabase.table("boloes")\
+            .select("cotas_disponiveis, status")\
+            .eq("id", request.bolao_id)\
+            .execute()
+        if bolao_check.data:
+            bolao = bolao_check.data[0]
+            if bolao["cotas_disponiveis"] <= 0 and bolao["status"] == "aberto":
+                supabase.table("boloes")\
+                    .update({"status": "fechado"})\
+                    .eq("id", request.bolao_id)\
+                    .execute()
+                logger.info(f"Bolão {request.bolao_id} fechado automaticamente (cotas esgotadas)")
+    except Exception as e:
+        logger.warning(f"Erro ao verificar auto-fechamento: {e}")
+
     return ComprarCotaResponse(
         mensagem="Cota comprada com sucesso!",
         cota_id=resultado.get("cota_id", ""),

@@ -185,12 +185,20 @@ async def atualizar_bolao(
     
     bolao_atual = existing.data[0] if isinstance(existing.data, list) else existing.data
     
-    # Verificar se bolão já foi apurado (não pode editar)
+    # Se bolão já foi apurado, só permite alterar o status
     if bolao_atual["status"] == "apurado":
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Não é possível editar um bolão já apurado"
-        )
+        if bolao_data.status is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Não é possível editar um bolão já apurado (apenas mudança de status é permitida)"
+            )
+        # Verificar se está tentando alterar algo além do status
+        campos_alterados = {k for k, v in bolao_data.model_dump(exclude_none=True).items() if k != "status"}
+        if campos_alterados:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Bolão apurado: apenas mudança de status é permitida"
+            )
     
     # Preparar dados para atualização (apenas campos fornecidos)
     update_dict = {}
