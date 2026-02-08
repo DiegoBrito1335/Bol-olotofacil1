@@ -199,26 +199,45 @@ async def meus_resultados(
         if not cotas_data:
             return []
 
-        # Filtrar apenas bolões apurados
-        bolao_ids_apurados = list(set(
-            c["bolao_id"] for c in cotas_data
-            if c.get("bolao_status") == "apurado"
-        ))
+        # Buscar TODOS os bolões do usuário (sem filtrar por status)
+        all_bolao_ids = list(set(c["bolao_id"] for c in cotas_data))
 
-        if not bolao_ids_apurados:
+        if not all_bolao_ids:
             return []
 
         # 2. Buscar dados dos bolões
         boloes_result = supabase.table("boloes")\
             .select("id, nome, concurso_numero, concurso_fim, status, resultado_dezenas, total_cotas, cotas_disponiveis, valor_cota")\
-            .in_("id", bolao_ids_apurados)\
+            .in_("id", all_bolao_ids)\
             .execute()
         boloes_map = {b["id"]: b for b in (boloes_result.data or [])}
 
-        # 3. Buscar jogos de todos os bolões
+        # Filtrar: manter apenas bolões que têm resultados reais
+        bolao_ids_com_resultado = []
+        for bid, b in boloes_map.items():
+            if b.get("resultado_dezenas"):
+                bolao_ids_com_resultado.append(bid)
+            elif b.get("status") == "apurado":
+                bolao_ids_com_resultado.append(bid)
+
+        # Checar resultados_concurso (teimosinha) para os demais
+        ids_sem_resultado = [bid for bid in all_bolao_ids if bid not in bolao_ids_com_resultado]
+        if ids_sem_resultado:
+            check_result = supabase.table("resultados_concurso")\
+                .select("bolao_id")\
+                .in_("bolao_id", ids_sem_resultado)\
+                .limit(100)\
+                .execute()
+            ids_com_teimosinha = set(r["bolao_id"] for r in (check_result.data or []))
+            bolao_ids_com_resultado.extend(ids_com_teimosinha)
+
+        if not bolao_ids_com_resultado:
+            return []
+
+        # 3. Buscar jogos de todos os bolões com resultado
         jogos_result = supabase.table("jogos_bolao")\
             .select("id, bolao_id, dezenas, acertos")\
-            .in_("bolao_id", bolao_ids_apurados)\
+            .in_("bolao_id", bolao_ids_com_resultado)\
             .execute()
 
         jogos_por_bolao: Dict[str, list] = {}
@@ -229,7 +248,7 @@ async def meus_resultados(
         # 4. Buscar resultados_concurso (teimosinha)
         resultados_result = supabase.table("resultados_concurso")\
             .select("bolao_id, concurso_numero, dezenas")\
-            .in_("bolao_id", bolao_ids_apurados)\
+            .in_("bolao_id", bolao_ids_com_resultado)\
             .order("concurso_numero")\
             .execute()
 
@@ -241,7 +260,7 @@ async def meus_resultados(
         # 5. Buscar acertos_concurso (teimosinha - acertos por jogo por concurso)
         acertos_result = supabase.table("acertos_concurso")\
             .select("bolao_id, concurso_numero, jogo_id, acertos")\
-            .in_("bolao_id", bolao_ids_apurados)\
+            .in_("bolao_id", bolao_ids_com_resultado)\
             .execute()
 
         acertos_map: Dict[str, Dict[int, Dict[str, int]]] = {}
@@ -254,7 +273,7 @@ async def meus_resultados(
         # 6. Buscar premiações
         premiacoes_result = supabase.table("premiacoes_bolao")\
             .select("bolao_id, concurso_numero, premio_total")\
-            .in_("bolao_id", bolao_ids_apurados)\
+            .in_("bolao_id", bolao_ids_com_resultado)\
             .execute()
 
         premiacoes_map: Dict[str, Dict[int, float]] = {}
@@ -300,16 +319,21 @@ async def meus_resultados(
                     acertos_cn = acertos_map.get(bid, {}).get(cn, {})
 
                     jogos_com_acertos = []
+                    resumo_acertos = {15: 0, 14: 0, 13: 0, 12: 0, 11: 0}
                     for j in jogos_bolao:
+                        ac = acertos_cn.get(j["id"], 0)
                         jogos_com_acertos.append({
                             "dezenas": sorted(j["dezenas"]),
-                            "acertos": acertos_cn.get(j["id"], 0)
+                            "acertos": ac
                         })
+                        if ac in resumo_acertos:
+                            resumo_acertos[ac] += 1
 
                     resultados_list.append({
                         "concurso_numero": cn,
                         "dezenas_sorteadas": sorted(res["dezenas"]),
                         "premio_total": premiacoes_map.get(bid, {}).get(cn, 0),
+                        "resumo_acertos": resumo_acertos,
                         "jogos": jogos_com_acertos,
                     })
             else:
@@ -318,18 +342,22 @@ async def meus_resultados(
                 if dezenas_resultado:
                     resultado_set = set(dezenas_resultado)
                     jogos_com_acertos = []
+                    resumo_acertos = {15: 0, 14: 0, 13: 0, 12: 0, 11: 0}
                     for j in jogos_bolao:
                         acertos = len(set(j["dezenas"]) & resultado_set)
                         jogos_com_acertos.append({
                             "dezenas": sorted(j["dezenas"]),
                             "acertos": acertos
                         })
+                        if acertos in resumo_acertos:
+                            resumo_acertos[acertos] += 1
 
                     cn = bolao["concurso_numero"]
                     resultados_list.append({
                         "concurso_numero": cn,
                         "dezenas_sorteadas": sorted(dezenas_resultado),
                         "premio_total": premiacoes_map.get(bid, {}).get(cn, 0),
+                        "resumo_acertos": resumo_acertos,
                         "jogos": jogos_com_acertos,
                     })
 
