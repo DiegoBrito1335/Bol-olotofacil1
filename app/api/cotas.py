@@ -339,12 +339,29 @@ async def meus_resultados(
             else:
                 # Concurso único
                 dezenas_resultado = bolao.get("resultado_dezenas")
+
+                # Fallback: se resultado_dezenas está vazio mas tem dados em resultados_concurso
+                # (acontece quando o cron apurou via apurar_todos_concursos)
+                if not dezenas_resultado and bid in resultados_por_bolao:
+                    res_fallback = resultados_por_bolao[bid]
+                    if res_fallback:
+                        dezenas_resultado = res_fallback[0].get("dezenas")
+
                 if dezenas_resultado:
                     resultado_set = set(dezenas_resultado)
+                    cn = bolao["concurso_numero"]
+
+                    # Usar acertos_concurso se disponível (apurado pelo cron)
+                    acertos_cn = acertos_map.get(bid, {}).get(cn, {})
+
                     jogos_com_acertos = []
                     resumo_acertos = {15: 0, 14: 0, 13: 0, 12: 0, 11: 0}
                     for j in jogos_bolao:
-                        acertos = len(set(j["dezenas"]) & resultado_set)
+                        # Preferir acertos já calculados, senão calcular na hora
+                        if acertos_cn and j["id"] in acertos_cn:
+                            acertos = acertos_cn[j["id"]]
+                        else:
+                            acertos = len(set(j["dezenas"]) & resultado_set)
                         jogos_com_acertos.append({
                             "dezenas": sorted(j["dezenas"]),
                             "acertos": acertos
@@ -352,7 +369,6 @@ async def meus_resultados(
                         if acertos in resumo_acertos:
                             resumo_acertos[acertos] += 1
 
-                    cn = bolao["concurso_numero"]
                     resultados_list.append({
                         "concurso_numero": cn,
                         "dezenas_sorteadas": sorted(dezenas_resultado),

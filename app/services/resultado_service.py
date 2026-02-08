@@ -345,9 +345,9 @@ class ResultadoService:
             if acertos >= 11:
                 resumo[acertos] = resumo.get(acertos, 0) + 1
 
-        # Incrementar concursos_apurados
+        # Incrementar concursos_apurados (com null safety)
         bolao_result = supabase.table("boloes").select("concursos_apurados").eq("id", bolao_id).execute()
-        apurados_atual = bolao_result.data[0]["concursos_apurados"] if bolao_result.data else 0
+        apurados_atual = (bolao_result.data[0].get("concursos_apurados") or 0) if bolao_result.data else 0
 
         supabase.table("boloes")\
             .update({"concursos_apurados": apurados_atual + 1})\
@@ -431,12 +431,20 @@ class ResultadoService:
         # Verificar se todos os concursos foram apurados
         total_concursos = BolaoService.total_concursos(bolao)
         bolao_atualizado = supabase.table("boloes").select("concursos_apurados").eq("id", bolao_id).execute()
-        apurados = bolao_atualizado.data[0]["concursos_apurados"] if bolao_atualizado.data else 0
+        apurados = (bolao_atualizado.data[0].get("concursos_apurados") or 0) if bolao_atualizado.data else 0
 
         if apurados >= total_concursos:
             # Todos apurados — mudar status para "apurado"
+            update_data = {"status": "apurado"}
+
+            # Para concurso único, também setar resultado_dezenas no bolão
+            # (o cron usa apurar_todos_concursos para todos os bolões,
+            # e resultado_dezenas é necessário para exibir resultados)
+            if not BolaoService.is_teimosinha(bolao) and resultados:
+                update_data["resultado_dezenas"] = resultados[0].get("dezenas", [])
+
             supabase.table("boloes")\
-                .update({"status": "apurado"})\
+                .update(update_data)\
                 .eq("id", bolao_id)\
                 .execute()
 
