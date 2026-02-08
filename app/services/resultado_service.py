@@ -256,12 +256,9 @@ class ResultadoService:
             if acertos >= 11:
                 resumo[acertos] = resumo.get(acertos, 0) + 1
 
-        # Atualizar bolão com resultado e status
+        # Atualizar bolão com status apurado
         supabase.table("boloes")\
-            .update({
-                "resultado_dezenas": resultado_dezenas,
-                "status": "apurado",
-            })\
+            .update({"status": "apurado"})\
             .eq("id", bolao_id)\
             .execute()
 
@@ -271,6 +268,22 @@ class ResultadoService:
             .eq("id", bolao_id)\
             .execute()
         concurso = bolao_result.data[0]["concurso_numero"] if bolao_result.data else 0
+
+        # Inserir em resultados_concurso (consistência com apurar_concurso)
+        supabase.table("resultados_concurso").insert({
+            "bolao_id": bolao_id,
+            "concurso_numero": concurso,
+            "dezenas": resultado_dezenas,
+        }).execute()
+
+        # Inserir acertos por jogo em acertos_concurso
+        for jogo_res in jogos_resultado:
+            supabase.table("acertos_concurso").insert({
+                "jogo_id": jogo_res["jogo_id"],
+                "bolao_id": bolao_id,
+                "concurso_numero": concurso,
+                "acertos": jogo_res["acertos"],
+            }).execute()
 
         # Buscar premiação e distribuir
         premio_total = 0.0
@@ -435,16 +448,8 @@ class ResultadoService:
 
         if apurados >= total_concursos:
             # Todos apurados — mudar status para "apurado"
-            update_data = {"status": "apurado"}
-
-            # Para concurso único, também setar resultado_dezenas no bolão
-            # (o cron usa apurar_todos_concursos para todos os bolões,
-            # e resultado_dezenas é necessário para exibir resultados)
-            if not BolaoService.is_teimosinha(bolao) and resultados:
-                update_data["resultado_dezenas"] = resultados[0].get("dezenas", [])
-
             supabase.table("boloes")\
-                .update(update_data)\
+                .update({"status": "apurado"})\
                 .eq("id", bolao_id)\
                 .execute()
 

@@ -196,39 +196,26 @@ async def meus_resultados(
             )
 
         cotas_data = cotas_result.data or []
-        logger.info(f"[meus-resultados] user={current_user['id']} cotas={len(cotas_data)}")
         if not cotas_data:
             return []
 
         # Buscar TODOS os bolões do usuário (sem filtrar por status)
         all_bolao_ids = list(set(c["bolao_id"] for c in cotas_data))
-        logger.info(f"[meus-resultados] bolao_ids={all_bolao_ids}")
 
         if not all_bolao_ids:
             return []
 
-        # 2. Buscar dados dos bolões
+        # 2. Buscar dados dos bolões (sem resultado_dezenas — coluna não existe)
         boloes_result = supabase.table("boloes")\
-            .select("id, nome, concurso_numero, concurso_fim, status, resultado_dezenas, total_cotas, cotas_disponiveis, valor_cota")\
+            .select("id, nome, concurso_numero, concurso_fim, status, total_cotas, cotas_disponiveis, valor_cota")\
             .in_("id", all_bolao_ids)\
             .execute()
         boloes_map = {b["id"]: b for b in (boloes_result.data or [])}
 
-        for bid, b in boloes_map.items():
-            has_dez = bool(b.get("resultado_dezenas"))
-            logger.info(f"[meus-resultados] bolao={b.get('nome')} status={b.get('status')} has_dezenas={has_dez} concurso={b.get('concurso_numero')} concurso_fim={b.get('concurso_fim')}")
+        # Filtrar: manter apenas bolões com status "apurado" OU que tenham dados em resultados_concurso
+        bolao_ids_com_resultado = [bid for bid, b in boloes_map.items() if b.get("status") == "apurado"]
 
-        # Filtrar: manter apenas bolões que têm resultados reais
-        bolao_ids_com_resultado = []
-        for bid, b in boloes_map.items():
-            if b.get("resultado_dezenas"):
-                bolao_ids_com_resultado.append(bid)
-                logger.info(f"[meus-resultados] {b.get('nome')}: incluido via resultado_dezenas")
-            elif b.get("status") == "apurado":
-                bolao_ids_com_resultado.append(bid)
-                logger.info(f"[meus-resultados] {b.get('nome')}: incluido via status=apurado")
-
-        # Checar resultados_concurso (teimosinha) para os demais
+        # Checar resultados_concurso para bolões que não estão "apurado"
         ids_sem_resultado = [bid for bid in all_bolao_ids if bid not in bolao_ids_com_resultado]
         if ids_sem_resultado:
             check_result = supabase.table("resultados_concurso")\
@@ -236,12 +223,8 @@ async def meus_resultados(
                 .in_("bolao_id", ids_sem_resultado)\
                 .limit(100)\
                 .execute()
-            ids_com_teimosinha = set(r["bolao_id"] for r in (check_result.data or []))
-            bolao_ids_com_resultado.extend(ids_com_teimosinha)
-            if ids_com_teimosinha:
-                logger.info(f"[meus-resultados] incluidos via resultados_concurso: {ids_com_teimosinha}")
-
-        logger.info(f"[meus-resultados] total boloes com resultado: {len(bolao_ids_com_resultado)}")
+            ids_com_resultados = set(r["bolao_id"] for r in (check_result.data or []))
+            bolao_ids_com_resultado.extend(ids_com_resultados)
 
         if not bolao_ids_com_resultado:
             return []
@@ -349,17 +332,9 @@ async def meus_resultados(
                         "jogos": jogos_com_acertos,
                     })
             else:
-                # Concurso único
-                dezenas_resultado = bolao.get("resultado_dezenas")
-                logger.info(f"[meus-resultados] bolao {bolao.get('nome')}: dezenas_resultado={'SIM' if dezenas_resultado else 'NULL'}, bid_in_resultados={bid in resultados_por_bolao}, jogos={len(jogos_bolao)}")
-
-                # Fallback: se resultado_dezenas está vazio mas tem dados em resultados_concurso
-                # (acontece quando o cron apurou via apurar_todos_concursos)
-                if not dezenas_resultado and bid in resultados_por_bolao:
-                    res_fallback = resultados_por_bolao[bid]
-                    if res_fallback:
-                        dezenas_resultado = res_fallback[0].get("dezenas")
-                        logger.info(f"[meus-resultados] fallback: encontrou {len(dezenas_resultado)} dezenas em resultados_concurso")
+                # Concurso único — buscar dezenas de resultados_concurso
+                res_list = resultados_por_bolao.get(bid, [])
+                dezenas_resultado = res_list[0].get("dezenas") if res_list else None
 
                 if dezenas_resultado:
                     resultado_set = set(dezenas_resultado)
@@ -403,7 +378,6 @@ async def meus_resultados(
                     "quantidade_cotas": user_qtd,
                 })
 
-        logger.info(f"[meus-resultados] retornando {len(response)} resultados")
         return response
 
     except HTTPException:

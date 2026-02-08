@@ -941,12 +941,20 @@ async def ver_resultado(bolao_id: str):
             "resumo_geral": resumo_geral,
         }
 
-    # Concurso único: resultado normal
-    if not bolao.get("resultado_dezenas"):
+    # Concurso único — buscar dezenas de resultados_concurso
+    res_concurso = supabase.table("resultados_concurso")\
+        .select("dezenas")\
+        .eq("bolao_id", bolao_id)\
+        .eq("concurso_numero", bolao["concurso_numero"])\
+        .execute()
+
+    if not res_concurso.data:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Este bolão ainda não foi apurado"
         )
+
+    resultado_dezenas = res_concurso.data[0]["dezenas"]
 
     jogos_result = supabase.table("jogos_bolao")\
         .select("*")\
@@ -973,7 +981,7 @@ async def ver_resultado(bolao_id: str):
         "bolao_id": bolao_id,
         "teimosinha": False,
         "concurso_numero": bolao["concurso_numero"],
-        "resultado_dezenas": bolao["resultado_dezenas"],
+        "resultado_dezenas": resultado_dezenas,
         "jogos_resultado": jogos_resultado,
         "resumo": resumo,
     }
