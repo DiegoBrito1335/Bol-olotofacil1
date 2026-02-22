@@ -58,7 +58,8 @@ async def registrar_usuario(request: RegistroRequest):
         )
 
     # 1. Criar usuário via Supabase Auth signup (envia email de confirmação automaticamente)
-    auth_url = f"{settings.SUPABASE_URL}/auth/v1/signup"
+    redirect_to = f"{settings.FRONTEND_URL}/confirmar-email"
+    auth_url = f"{settings.SUPABASE_URL}/auth/v1/signup?redirect_to={redirect_to}"
     auth_headers = {
         "apikey": settings.SUPABASE_ANON_KEY,
         "Content-Type": "application/json",
