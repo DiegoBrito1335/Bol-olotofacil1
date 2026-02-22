@@ -99,7 +99,15 @@ async def registrar_usuario(request: RegistroRequest):
             detail="Erro ao criar conta. Tente novamente."
         )
 
-    auth_user = auth_response.json()
+    resp_json = auth_response.json()
+
+    # Supabase retorna estrutura diferente dependendo da configuração:
+    # - Confirmação ativada: { id, email, identities, ... }
+    # - Confirmação desativada: { access_token, user: { id, email, identities, ... } }
+    if "user" in resp_json and isinstance(resp_json["user"], dict):
+        auth_user = resp_json["user"]
+    else:
+        auth_user = resp_json
 
     # Email duplicado: Supabase retorna 200 mas com identities vazio
     identities = auth_user.get("identities", None)
@@ -111,7 +119,7 @@ async def registrar_usuario(request: RegistroRequest):
 
     usuario_id = auth_user.get("id")
     if not usuario_id:
-        logger.error(f"Supabase signup não retornou id: {auth_user}")
+        logger.error(f"Supabase signup não retornou id: {resp_json}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Erro ao criar conta"
