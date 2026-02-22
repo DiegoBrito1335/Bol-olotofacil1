@@ -78,6 +78,13 @@ async def registrar_usuario(request: RegistroRequest):
             detail="Erro ao conectar com serviço de autenticação"
         )
 
+    if auth_response.status_code == 400:
+        # Email já cadastrado (com confirmação de email ativada, Supabase retorna 400)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Este e-mail já está cadastrado"
+        )
+
     if auth_response.status_code not in (200, 201):
         error_detail = ""
         try:
