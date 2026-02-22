@@ -44,16 +44,9 @@ async def get_perfil(current_user=Depends(get_current_user)):
             .eq("id", current_user["id"])\
             .execute()
 
-    if result.error or not result.data:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Perfil não encontrado"
-        )
-
-    perfil = result.data[0] if isinstance(result.data, list) else result.data
-
-    # Buscar email do Supabase Auth
+    # Buscar email do Supabase Auth (necessário independentemente do resultado acima)
     email = ""
+    nome_auth = ""
     try:
         import httpx
         from app.config import settings
@@ -64,9 +57,37 @@ async def get_perfil(current_user=Depends(get_current_user)):
         }
         resp = httpx.get(auth_url, headers=auth_headers, timeout=10.0)
         if resp.status_code == 200:
-            email = resp.json().get("email", "")
+            auth_data = resp.json()
+            email = auth_data.get("email", "")
+            nome_auth = auth_data.get("user_metadata", {}).get("nome", "")
     except Exception as e:
         logger.warning(f"Erro ao buscar email: {e}")
+
+    if result.error or not result.data:
+        # Perfil não existe — auto-criar com dados do Auth
+        logger.info(f"Criando perfil ausente para usuário {current_user['id']}")
+        nome_inicial = nome_auth or email.split("@")[0] if email else "Usuário"
+        supabase.table("usuarios").insert({
+            "id": current_user["id"],
+            "nome": nome_inicial,
+            "telefone": None,
+        }).execute()
+        # Garantir que a carteira também existe
+        carteira_check = supabase.table("carteira").select("id").eq("usuario_id", current_user["id"]).execute()
+        if not carteira_check.data:
+            supabase.table("carteira").insert({
+                "usuario_id": current_user["id"],
+                "saldo_disponivel": 0.0,
+                "saldo_bloqueado": 0.0,
+            }).execute()
+        return PerfilResponse(
+            nome=nome_inicial,
+            email=email,
+            telefone=None,
+            chave_pix=None,
+        )
+
+    perfil = result.data[0] if isinstance(result.data, list) else result.data
 
     return PerfilResponse(
         nome=perfil.get("nome", ""),
