@@ -13,47 +13,74 @@ logger = logging.getLogger(__name__)
 
 class ResultadoService:
 
+    # APIs de resultado em ordem de preferência
+    _APIS = [
+        {
+            "url": "https://servicebus2.caixa.gov.br/portaldeloterias/api/lotofacil/{concurso}",
+            "campo_dezenas": "listaDezenas",
+            "campo_premiacoes": "listaRateioPremio",
+        },
+        {
+            "url": "https://loteriascaixa-api.herokuapp.com/api/lotofacil/{concurso}",
+            "campo_dezenas": "dezenas",
+            "campo_premiacoes": "premiacoes",
+        },
+    ]
+    _HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; BolaoBot/1.0)"}
+
     @staticmethod
     async def buscar_resultado_api(concurso_numero: int) -> Optional[List[int]]:
         """
         Busca resultado da Lotofácil via API pública.
-        Retorna lista ordenada de 15 inteiros, ou None se falhar.
+        Tenta a API oficial da Caixa primeiro, com fallback para a API Heroku.
+        Retorna lista ordenada de 15 inteiros, ou None se ambas falharem.
         """
-        url = f"https://loteriascaixa-api.herokuapp.com/api/lotofacil/{concurso_numero}"
-        try:
-            async with httpx.AsyncClient() as client:
-                response = await client.get(url, timeout=10.0)
-                if response.status_code == 200:
-                    data = response.json()
-                    dezenas = [int(d) for d in data.get("dezenas", [])]
-                    if len(dezenas) == 15:
-                        return sorted(dezenas)
-                    logger.warning(f"API retornou {len(dezenas)} dezenas para concurso {concurso_numero}")
-                else:
-                    logger.warning(f"API retornou status {response.status_code} para concurso {concurso_numero}")
-        except Exception as e:
-            logger.error(f"Erro ao buscar resultado do concurso {concurso_numero}: {e}")
+        async with httpx.AsyncClient() as client:
+            for api in ResultadoService._APIS:
+                url = api["url"].format(concurso=concurso_numero)
+                campo = api["campo_dezenas"]
+                try:
+                    response = await client.get(url, timeout=30.0, headers=ResultadoService._HEADERS)
+                    if response.status_code == 200:
+                        data = response.json()
+                        dezenas = [int(d) for d in data.get(campo, [])]
+                        if len(dezenas) == 15:
+                            logger.info(f"Resultado do concurso {concurso_numero} obtido via {url}")
+                            return sorted(dezenas)
+                        logger.warning(f"API {url} retornou {len(dezenas)} dezenas para concurso {concurso_numero}")
+                    else:
+                        logger.warning(f"API {url} retornou status {response.status_code}")
+                except Exception as e:
+                    logger.warning(f"Falha na API {url}: {e}")
+        logger.error(f"Todas as APIs falharam para concurso {concurso_numero}")
         return None
 
     @staticmethod
     async def buscar_resultado_completo(concurso_numero: int) -> Optional[Dict[str, Any]]:
         """
         Busca resultado completo da Lotofácil via API pública.
+        Tenta a API oficial da Caixa primeiro, com fallback para a API Heroku.
         Retorna {dezenas: [...], premiacoes: {11: valor, 12: valor, ...}} ou None.
         """
-        url = f"https://loteriascaixa-api.herokuapp.com/api/lotofacil/{concurso_numero}"
-        try:
-            async with httpx.AsyncClient() as client:
-                response = await client.get(url, timeout=10.0)
-                if response.status_code == 200:
+        async with httpx.AsyncClient() as client:
+            for api in ResultadoService._APIS:
+                url = api["url"].format(concurso=concurso_numero)
+                campo_dezenas = api["campo_dezenas"]
+                campo_premiacoes = api["campo_premiacoes"]
+                try:
+                    response = await client.get(url, timeout=30.0, headers=ResultadoService._HEADERS)
+                    if response.status_code != 200:
+                        logger.warning(f"API {url} retornou status {response.status_code}")
+                        continue
+
                     data = response.json()
-                    dezenas = [int(d) for d in data.get("dezenas", [])]
+                    dezenas = [int(d) for d in data.get(campo_dezenas, [])]
                     if len(dezenas) != 15:
-                        logger.warning(f"API retornou {len(dezenas)} dezenas para concurso {concurso_numero}")
-                        return None
+                        logger.warning(f"API {url} retornou {len(dezenas)} dezenas para concurso {concurso_numero}")
+                        continue
 
                     # Extrair premiações por faixa de acertos
-                    premiacoes_raw = data.get("premiacoes", [])
+                    premiacoes_raw = data.get(campo_premiacoes, [])
                     premiacoes = {}
                     for p in premiacoes_raw:
                         faixa = p.get("faixa", 0)
@@ -63,14 +90,15 @@ class ResultadoService:
                         if 11 <= acertos <= 15:
                             premiacoes[acertos] = float(valor) if valor else 0.0
 
+                    logger.info(f"Resultado completo do concurso {concurso_numero} obtido via {url}")
                     return {
                         "dezenas": sorted(dezenas),
                         "premiacoes": premiacoes,
                     }
-                else:
-                    logger.warning(f"API retornou status {response.status_code} para concurso {concurso_numero}")
-        except Exception as e:
-            logger.error(f"Erro ao buscar resultado completo do concurso {concurso_numero}: {e}")
+                except Exception as e:
+                    logger.warning(f"Falha na API {url}: {e}")
+
+        logger.error(f"Todas as APIs falharam para concurso {concurso_numero}")
         return None
 
     @staticmethod
