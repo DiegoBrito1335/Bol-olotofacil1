@@ -1,5 +1,5 @@
 """
-Rotas de autenticação e registro de usuários (modo desenvolvimento)
+Rotas de autenticação e registro de usuários
 """
 
 from fastapi import APIRouter, HTTPException, status
@@ -34,7 +34,7 @@ class RegistroResponse(BaseModel):
 async def registrar_usuario(request: RegistroRequest):
     """
     Registra um novo usuário.
-    1. Cria usuário no Supabase Auth (auth.users)
+    1. Cria usuário via Supabase Auth signup (envia email de confirmação)
     2. Cria perfil na tabela 'usuarios'
     3. Cria carteira com saldo zero
     """
@@ -57,18 +57,16 @@ async def registrar_usuario(request: RegistroRequest):
             detail="Senha deve ter no mínimo 6 caracteres"
         )
 
-    # 1. Criar usuário no Supabase Auth via Admin API
-    auth_url = f"{settings.SUPABASE_URL}/auth/v1/admin/users"
+    # 1. Criar usuário via Supabase Auth signup (envia email de confirmação automaticamente)
+    auth_url = f"{settings.SUPABASE_URL}/auth/v1/signup"
     auth_headers = {
-        "apikey": settings.SUPABASE_SERVICE_ROLE_KEY,
-        "Authorization": f"Bearer {settings.SUPABASE_SERVICE_ROLE_KEY}",
+        "apikey": settings.SUPABASE_ANON_KEY,
         "Content-Type": "application/json",
     }
     auth_payload = {
         "email": request.email.strip(),
         "password": request.senha,
-        "email_confirm": True,
-        "user_metadata": {"nome": request.nome.strip()},
+        "data": {"nome": request.nome.strip()},
     }
 
     try:
@@ -78,12 +76,6 @@ async def registrar_usuario(request: RegistroRequest):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Erro ao conectar com serviço de autenticação"
-        )
-
-    if auth_response.status_code == 422:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Este e-mail já está cadastrado"
         )
 
     if auth_response.status_code not in (200, 201):
@@ -99,7 +91,22 @@ async def registrar_usuario(request: RegistroRequest):
         )
 
     auth_user = auth_response.json()
-    usuario_id = auth_user["id"]
+
+    # Email duplicado: Supabase retorna 200 mas com identities vazio
+    identities = auth_user.get("identities", None)
+    if identities is not None and len(identities) == 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Este e-mail já está cadastrado"
+        )
+
+    usuario_id = auth_user.get("id")
+    if not usuario_id:
+        logger.error(f"Supabase signup não retornou id: {auth_user}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Erro ao criar conta"
+        )
 
     # 2. Criar perfil na tabela 'usuarios'
     usuario_data = {
@@ -133,7 +140,7 @@ async def registrar_usuario(request: RegistroRequest):
         id=usuario_id,
         nome=request.nome.strip(),
         email=request.email.strip(),
-        mensagem="Conta criada com sucesso!",
+        mensagem="Cadastro realizado! Verifique seu email para confirmar a conta.",
         is_admin=is_admin,
     )
 
@@ -190,6 +197,17 @@ async def login_usuario(request: LoginRequest):
         )
 
     if auth_response.status_code == 400:
+        try:
+            err = auth_response.json()
+            if "not confirmed" in err.get("error_description", "").lower():
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="EMAIL_NOT_CONFIRMED"
+                )
+        except HTTPException:
+            raise
+        except Exception:
+            pass
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="E-mail ou senha incorretos"
@@ -224,3 +242,90 @@ async def login_usuario(request: LoginRequest):
         email=user_email,
         is_admin=is_admin,
     )
+
+
+class ForgotPasswordRequest(BaseModel):
+    email: str
+
+
+@router.post("/forgot-password", status_code=status.HTTP_200_OK)
+async def esqueceu_senha(request: ForgotPasswordRequest):
+    """
+    Envia email de recuperação de senha.
+    Sempre retorna 200 para não revelar se o email existe.
+    """
+
+    if not request.email or not request.email.strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="E-mail é obrigatório"
+        )
+
+    redirect_to = f"{settings.FRONTEND_URL}/redefinir-senha"
+    auth_url = f"{settings.SUPABASE_URL}/auth/v1/recover"
+    auth_headers = {
+        "apikey": settings.SUPABASE_ANON_KEY,
+        "Content-Type": "application/json",
+    }
+    auth_payload = {
+        "email": request.email.strip(),
+        "redirect_to": redirect_to,
+    }
+
+    try:
+        httpx.post(auth_url, json=auth_payload, headers=auth_headers, timeout=15.0)
+    except Exception as e:
+        logger.error(f"Erro ao enviar email de recuperação: {e}")
+
+    return {"mensagem": "Se esse email estiver cadastrado, você receberá um link em instantes."}
+
+
+class ResetPasswordRequest(BaseModel):
+    access_token: str
+    nova_senha: str
+
+
+@router.post("/reset-password", status_code=status.HTTP_200_OK)
+async def redefinir_senha(request: ResetPasswordRequest):
+    """
+    Redefine a senha usando o access_token recebido no email de recuperação.
+    """
+
+    if not request.nova_senha or len(request.nova_senha) < 6:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="A nova senha deve ter no mínimo 6 caracteres"
+        )
+
+    auth_url = f"{settings.SUPABASE_URL}/auth/v1/user"
+    auth_headers = {
+        "apikey": settings.SUPABASE_ANON_KEY,
+        "Authorization": f"Bearer {request.access_token}",
+        "Content-Type": "application/json",
+    }
+    auth_payload = {"password": request.nova_senha}
+
+    try:
+        auth_response = httpx.put(auth_url, json=auth_payload, headers=auth_headers, timeout=15.0)
+    except Exception as e:
+        logger.error(f"Erro ao redefinir senha: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Erro ao conectar com serviço de autenticação"
+        )
+
+    if auth_response.status_code == 401:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Link de recuperação inválido ou expirado"
+        )
+
+    if auth_response.status_code not in (200, 201):
+        logger.error(f"Erro ao redefinir senha {auth_response.status_code}: {auth_response.text}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Erro ao redefinir senha"
+        )
+
+    logger.info("Senha redefinida com sucesso")
+    return {"mensagem": "Senha redefinida com sucesso!"}

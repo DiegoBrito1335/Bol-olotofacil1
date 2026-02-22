@@ -35,6 +35,9 @@ class Settings(BaseSettings):
     # Admins (emails separados por vírgula)
     ADMIN_EMAILS: str = "diego.santos.brito2015@gmail.com,vitoago@gmail.com"
 
+    # Frontend (usado nos links de email)
+    FRONTEND_URL: str = "http://localhost:3000"
+
     # Logs
     LOG_LEVEL: str = "DEBUG"
 
