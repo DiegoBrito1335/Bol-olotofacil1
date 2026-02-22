@@ -78,23 +78,25 @@ async def registrar_usuario(request: RegistroRequest):
             detail="Erro ao conectar com serviço de autenticação"
         )
 
-    if auth_response.status_code == 400:
-        # Email já cadastrado (com confirmação de email ativada, Supabase retorna 400)
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Este e-mail já está cadastrado"
-        )
-
     if auth_response.status_code not in (200, 201):
         error_detail = ""
         try:
-            error_detail = auth_response.json().get("msg", auth_response.text)
+            resp_json = auth_response.json()
+            error_detail = resp_json.get("msg", resp_json.get("message", auth_response.text))
         except Exception:
             error_detail = auth_response.text
-        logger.error(f"Erro Supabase Auth {auth_response.status_code}: {error_detail}")
+        logger.error(f"Erro Supabase Auth signup {auth_response.status_code}: {error_detail}")
+
+        # Email já cadastrado — Supabase retorna 400 ou 422 dependendo da versão/config
+        if auth_response.status_code in (400, 422) or "already" in error_detail.lower() or "registered" in error_detail.lower():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Este e-mail já está cadastrado"
+            )
+
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Erro ao criar conta: {error_detail}"
+            detail="Erro ao criar conta. Tente novamente."
         )
 
     auth_user = auth_response.json()
