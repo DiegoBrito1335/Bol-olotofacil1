@@ -37,7 +37,7 @@ Schemas (app/schemas/) provide Pydantic validation at the route layer.
 ```
 
 - `app/main.py` — FastAPI app, CORS, router registration, health check (`GET /`). `redirect_slashes=False`.
-- `app/config.py` — Pydantic Settings loaded from `.env`. Properties: `cors_origins_list`, `admin_emails_list` parse comma-separated env vars.
+- `app/config.py` — Pydantic Settings loaded from `.env`. Properties: `cors_origins_list`, `admin_emails_list` parse comma-separated env vars. Also has `FRONTEND_URL` (used in email links).
 - `app/api/deps.py` — Auth dependency injection (user auth + admin check)
 - `app/api/v1/admin/` — Admin-only routes (pool CRUD, games, apuração, stats)
 - `app/core/security.py` — Placeholder (JWT validation not yet implemented)
@@ -75,27 +75,53 @@ Admin routes use `dependencies=[Depends(get_admin_user)]` to protect them. The `
 
 Registration and login endpoints in `app/api/auth.py` use the Supabase Auth API directly via httpx. The login response includes an `is_admin` flag.
 
+### Auth flow (email confirmation + password recovery)
+
+Registration uses `POST /auth/v1/signup` (Supabase anon key) with `redirect_to={FRONTEND_URL}/confirmar-email` so the confirmation email links to the correct page. Email duplicate detection: Supabase returns HTTP 400, or HTTP 200 with `identities == []`.
+
+Login returns 403 with `detail="EMAIL_NOT_CONFIRMED"` if the user hasn't confirmed the email yet.
+
+Password recovery:
+- `POST /api/v1/auth/forgot-password` — calls `/auth/v1/recover` with `redirect_to={FRONTEND_URL}/redefinir-senha`. Always returns 200 (doesn't reveal if email exists).
+- `POST /api/v1/auth/reset-password` — calls `PUT /auth/v1/user` with `Authorization: Bearer {access_token}` from the recovery email link.
+
+Supabase Dashboard must have "Enable email confirmations" ON and the following Redirect URLs configured:
+- `https://bolao-lotofacil.vercel.app/**`
+- `http://localhost:3000/**`
+- `http://localhost:5173/**`
+
 ### API route prefixes
 
 All routes are under `/api/v1/`:
-- `/api/v1/auth` — registration and login
+- `/api/v1/auth` — registration, login, forgot-password, reset-password
 - `/api/v1/boloes` — public pool browsing and game listing
 - `/api/v1/cotas` — quota management and purchase
 - `/api/v1/carteira` — wallet balance
 - `/api/v1/pagamentos` — Pix payment creation and webhooks
 - `/api/v1/transacoes` — transaction history
+- `/api/v1/perfil` — user profile (nome, telefone, chave_pix). Auto-creates profile+carteira if missing.
 - `/api/v1/admin/boloes` — admin pool CRUD, game management, apuração
 - `/api/v1/admin/stats` — dashboard statistics and activity feed
+- `/api/v1/cron` — cron endpoints (fechar-boloes, apurar-resultados). Protected by `SECRET_KEY`.
 
 ### Key features
 
 **Game management (jogos):** Admins add lottery games (exactly 15 numbers from 1-25) to pools via `POST /admin/boloes/{id}/jogos`. Numbers are validated and stored sorted.
 
 **Result appraisal (apuração):** Two modes:
-- **Automatic:** `POST /admin/boloes/{id}/apurar/automatico` — fetches drawn numbers from `loteriascaixa-api.herokuapp.com/api/lotofacil/{concurso}` and calculates hits per game
+- **Automatic:** `POST /admin/boloes/{id}/apurar/automatico` — fetches drawn numbers from the Lotofácil API and calculates hits per game
 - **Manual:** `POST /admin/boloes/{id}/apurar` — admin provides the 15 drawn numbers
 
 Both update each game's `acertos` (hit count) and set the pool status to `apurado`.
+
+**Lotofácil API — dual source with fallback** (`app/services/resultado_service.py`):
+- Primary: `https://servicebus2.caixa.gov.br/portaldeloterias/api/lotofacil/{concurso}` (official Caixa API, field `listaDezenas` / `listaRateioPremio`)
+- Fallback: `https://loteriascaixa-api.herokuapp.com/api/lotofacil/{concurso}` (field `dezenas` / `premiacoes`)
+- Timeout: 30s. Prize mapping: `acertos = 16 - faixa` (faixa 1 = 15 hits, faixa 5 = 11 hits).
+
+**Cron jobs** (`app/api/cron.py`): Protected by `SECRET_KEY` via header `X-Cron-Secret` **or** query param `?secret=`. Scheduled on cron-job.org:
+- `POST /cron/fechar-boloes` — closes all `aberto` pools (run at 20:55)
+- `POST /cron/apurar-resultados` — appraises all pending pools (run `*/15 21,22 * * *`)
 
 **Payment flow:** Pix payments go through Mercado Pago (`app/services/pagamento_service.py`). In development mode (`ENVIRONMENT=development`), payments are simulated with fake QR codes. In production, real Mercado Pago API calls are made. The webhook endpoint is `/api/v1/pagamentos/webhook/mercadopago`.
 
@@ -103,15 +129,20 @@ Both update each game's `acertos` (hit count) and set the pool status to `apurad
 
 | Table | Key columns |
 |-------|-------------|
-| `boloes` | id, nome, concurso_numero, total_cotas, cotas_disponiveis, valor_cota, status, resultado_dezenas |
+| `boloes` | id, nome, concurso_numero, concurso_fim, total_cotas, cotas_disponiveis, valor_cota, status |
 | `jogos_bolao` | id, bolao_id, dezenas (int[]), acertos |
+| `resultados_concurso` | id, bolao_id, concurso_numero, dezenas_sorteadas (int[]) |
+| `acertos_concurso` | id, jogo_id, concurso_numero, acertos |
+| `premiacoes_bolao` | id, bolao_id, concurso_numero, acertos, valor_premio |
 | `cotas` | id, bolao_id, usuario_id, valor_pago |
 | `carteira` | id, usuario_id, saldo_disponivel, saldo_bloqueado |
 | `transacoes` | id, usuario_id, tipo, valor, origem, saldo_anterior, saldo_posterior |
 | `pagamentos_pix` | id, usuario_id, valor, status, qr_code, external_id |
-| `usuarios` | id, nome, telefone |
+| `usuarios` | id, nome, telefone, chave_pix |
 
 Pool statuses: `aberto`, `fechado`, `apurado`, `cancelado`
+
+**Important:** The column `resultado_dezenas` does NOT exist in `boloes`. All drawn numbers are stored in `resultados_concurso`.
 
 ### RPC functions
 
@@ -123,6 +154,7 @@ Pool statuses: `aberto`, `fechado`, `apurado`, `cancelado`
 Copy `.env.example` to `.env` and fill in values. Required variables:
 - `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`
 - `SECRET_KEY`
+- `FRONTEND_URL` (default: `http://localhost:3000`) — used in email confirmation and password recovery links
 
 Optional: `MERCADOPAGO_ACCESS_TOKEN`, `MERCADOPAGO_ENV`, `WEBHOOK_URL`, `CORS_ORIGINS`, `LOG_LEVEL`, `ADMIN_EMAILS`
 
@@ -134,4 +166,4 @@ Frontend dev server runs on port 3000 and proxies `/api` to this backend on port
 
 `GET /` health check returns `{"status": "ok"}`. Config: `Procfile` (Render/Heroku), `railway.toml` (unused — Railway trial was unreliable).
 
-Production env vars: `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `SECRET_KEY`, `ENVIRONMENT=production`, `CORS_ORIGINS`, `LOG_LEVEL=INFO`.
+Production env vars: `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `SECRET_KEY`, `ENVIRONMENT=production`, `CORS_ORIGINS`, `LOG_LEVEL=INFO`, `FRONTEND_URL=https://bolao-lotofacil.vercel.app`.
