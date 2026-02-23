@@ -75,9 +75,12 @@ async def comprar_cota(
         if bolao_check.data:
             bolao = bolao_check.data[0]
             if bolao["cotas_disponiveis"] <= 0 and bolao["status"] == "aberto":
+                # M1: .eq("status", "aberto") garante idempotência — se outro processo
+                # já fechou, esta operação não afeta nenhuma linha (sem duplicar fechamento)
                 supabase.table("boloes")\
                     .update({"status": "fechado"})\
                     .eq("id", request.bolao_id)\
+                    .eq("status", "aberto")\
                     .execute()
                 logger.info(f"Bolão {request.bolao_id} fechado automaticamente (cotas esgotadas)")
     except Exception as e:

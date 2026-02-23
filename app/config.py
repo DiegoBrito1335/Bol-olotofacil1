@@ -35,8 +35,8 @@ class Settings(BaseSettings):
     # CORS
     CORS_ORIGINS: str = "http://localhost:3000,http://localhost:5173"
 
-    # Admins (emails separados por vírgula)
-    ADMIN_EMAILS: str = "diego.santos.brito2015@gmail.com,vitoago@gmail.com"
+    # Admins (emails separados por vírgula) — configure no .env ou na env var do Render
+    ADMIN_EMAILS: str = ""
 
     # Frontend (usado nos links de email)
     FRONTEND_URL: str = "http://localhost:3000"
