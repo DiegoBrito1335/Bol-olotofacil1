@@ -20,3 +20,6 @@ loguru==0.7.2
 
 # JSON Web Tokens
 PyJWT==2.9.0
+
+# Rate limiting
+slowapi==0.1.9

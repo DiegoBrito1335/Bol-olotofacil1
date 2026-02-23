@@ -2,11 +2,12 @@
 Rotas de autenticação e registro de usuários
 """
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Request, status
 from pydantic import BaseModel
 from typing import Optional
 from app.core.supabase import supabase_admin as supabase
 from app.core.security import create_access_token
+from app.core.limiter import limiter
 from app.config import settings
 import logging
 import httpx
@@ -178,19 +179,21 @@ class LoginResponse(BaseModel):
 
 
 @router.post("/login", response_model=LoginResponse)
-async def login_usuario(request: LoginRequest):
+@limiter.limit("10/minute")
+async def login_usuario(request: Request, body: LoginRequest):
     """
     Autentica um usuário com e-mail e senha via Supabase Auth.
     Retorna um JWT assinado para uso como Bearer token.
+    Rate limit: 10 tentativas por minuto por IP.
     """
 
-    if not request.email or not request.email.strip():
+    if not body.email or not body.email.strip():
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="E-mail é obrigatório"
         )
 
-    if not request.senha:
+    if not body.senha:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Senha é obrigatória"
@@ -203,8 +206,8 @@ async def login_usuario(request: LoginRequest):
         "Content-Type": "application/json",
     }
     auth_payload = {
-        "email": request.email.strip(),
-        "password": request.senha,
+        "email": body.email.strip(),
+        "password": body.senha,
     }
 
     try:
@@ -277,13 +280,15 @@ class ForgotPasswordRequest(BaseModel):
 
 
 @router.post("/forgot-password", status_code=status.HTTP_200_OK)
-async def esqueceu_senha(request: ForgotPasswordRequest):
+@limiter.limit("3/minute")
+async def esqueceu_senha(request: Request, body: ForgotPasswordRequest):
     """
     Envia email de recuperação de senha.
     Sempre retorna 200 para não revelar se o email existe.
+    Rate limit: 3 por minuto por IP (anti-spam de email).
     """
 
-    if not request.email or not request.email.strip():
+    if not body.email or not body.email.strip():
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="E-mail é obrigatório"
@@ -296,7 +301,7 @@ async def esqueceu_senha(request: ForgotPasswordRequest):
         "Content-Type": "application/json",
     }
     auth_payload = {
-        "email": request.email.strip(),
+        "email": body.email.strip(),
         "redirect_to": redirect_to,
     }
 

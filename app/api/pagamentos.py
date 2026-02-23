@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, Request, Backgrou
 from app.schemas.pagamento import CriarPagamentoPixRequest, PagamentoPixResponse
 from app.services.pagamento_service import PagamentoService
 from app.api.deps import get_current_user_id
+from app.core.limiter import limiter
 import logging
 
 logger = logging.getLogger(__name__)
@@ -64,6 +65,7 @@ async def criar_pagamento_pix(
 
 
 @router.post("/webhook/mercadopago")
+@limiter.limit("60/minute")
 async def webhook_mercadopago(
     request: Request,
     background_tasks: BackgroundTasks

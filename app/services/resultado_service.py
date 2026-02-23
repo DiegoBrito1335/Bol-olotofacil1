@@ -225,6 +225,18 @@ class ResultadoService:
         5. Distribui prêmio se houver
         6. Retorna resumo
         """
+        # A2 — Verificar se o bolão já foi apurado antes de prosseguir (lock otimista)
+        bolao_check = supabase.table("boloes").select("status").eq("id", bolao_id).execute()
+        if bolao_check.data and bolao_check.data[0].get("status") == "apurado":
+            logger.warning(f"Bolão {bolao_id} já está apurado — ignorando apuração duplicada")
+            return {
+                "bolao_id": bolao_id,
+                "resultado_dezenas": resultado_dezenas,
+                "jogos_resultado": [],
+                "resumo": {},
+                "skipped": True,
+            }
+
         # Buscar jogos do bolão
         jogos_result = supabase.table("jogos_bolao")\
             .select("*")\
@@ -334,12 +346,26 @@ class ResultadoService:
 
         jogos = jogos_result.data or []
 
-        # Salvar resultado do concurso
-        supabase.table("resultados_concurso").insert({
+        # A2 — Salvar resultado do concurso (lock otimista: falha se já existir)
+        resultado_insert = supabase.table("resultados_concurso").insert({
             "bolao_id": bolao_id,
             "concurso_numero": concurso_numero,
             "dezenas": resultado_dezenas,
         }).execute()
+
+        if resultado_insert.error:
+            logger.warning(
+                f"Concurso {concurso_numero} do bolão {bolao_id} já está sendo apurado "
+                f"ou já foi apurado (insert duplicado): {resultado_insert.error}"
+            )
+            return {
+                "concurso_numero": concurso_numero,
+                "dezenas": resultado_dezenas,
+                "jogos_resultado": [],
+                "resumo": {},
+                "premio_total": 0.0,
+                "skipped": True,
+            }
 
         # Calcular e salvar acertos por jogo
         jogos_resultado = []

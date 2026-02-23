@@ -1,8 +1,11 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
 from app.config import settings
+from app.core.limiter import limiter
 import logging
-from app.api import transacoes 
+from app.api import transacoes
 
 # ====================================
 # IMPORTS DAS ROTAS PÚBLICAS
@@ -39,6 +42,10 @@ app = FastAPI(
     redoc_url="/redoc",
     redirect_slashes=False
 )
+
+# Registrar rate limiter
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # Configurar CORS
 app.add_middleware(

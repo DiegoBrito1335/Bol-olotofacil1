@@ -5,7 +5,7 @@ Endpoints de cron para tarefas automáticas via cron externo (ex: cron-job.org).
 Protegido por SECRET_KEY no header.
 """
 
-from fastapi import APIRouter, HTTPException, Header, Query, status
+from fastapi import APIRouter, HTTPException, Header, status
 from typing import Optional
 from app.core.supabase import supabase_admin as supabase
 from app.services.resultado_service import ResultadoService
@@ -20,14 +20,13 @@ router = APIRouter()
 @router.post("/apurar-resultados")
 async def cron_apurar_resultados(
     x_cron_secret: Optional[str] = Header(None),
-    secret: Optional[str] = Query(None),
 ):
     """
     Apura resultados pendentes de TODOS os bolões ativos.
-    Protegido por X-Cron-Secret header OU query param ?secret=.
+    Protegido por header X-Cron-Secret (configure no cron-job.org).
     Chamado por serviço de cron externo (ex: cron-job.org).
     """
-    token = x_cron_secret or secret
+    token = x_cron_secret
     if token != settings.SECRET_KEY:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -92,14 +91,13 @@ async def cron_apurar_resultados(
 @router.post("/fechar-boloes")
 async def cron_fechar_boloes(
     x_cron_secret: Optional[str] = Header(None),
-    secret: Optional[str] = Query(None),
 ):
     """
     Fecha todos os bolões com status 'aberto'.
     Deve ser chamado às 20:55 para impedir compras em cima da hora.
-    Protegido por X-Cron-Secret header OU query param ?secret=.
+    Protegido por header X-Cron-Secret (configure no cron-job.org).
     """
-    token = x_cron_secret or secret
+    token = x_cron_secret
     if token != settings.SECRET_KEY:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
