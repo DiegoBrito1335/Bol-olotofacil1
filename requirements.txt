@@ -23,3 +23,6 @@ PyJWT==2.9.0
 
 # Rate limiting
 slowapi==0.1.9
+
+# Monitoramento de erros
+sentry-sdk[fastapi]==2.19.2

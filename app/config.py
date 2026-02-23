@@ -1,4 +1,5 @@
 from pydantic_settings import BaseSettings
+from pydantic import model_validator
 from typing import List
 
 
@@ -7,23 +8,23 @@ class Settings(BaseSettings):
     Configurações da aplicação.
     Carrega variáveis do arquivo .env automaticamente.
     """
-    
+
     # Aplicação
     ENVIRONMENT: str = "development"
     HOST: str = "0.0.0.0"
     PORT: int = 8000
-    
+
     # Supabase
     SUPABASE_URL: str
     SUPABASE_ANON_KEY: str
     SUPABASE_SERVICE_ROLE_KEY: str
     DATABASE_URL: str = ""
-    
+
     # Segurança
     SECRET_KEY: str
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 720  # 12 horas
-    
+
     # Mercado Pago (opcional por enquanto)
     MERCADOPAGO_ACCESS_TOKEN: str = ""
     MERCADOPAGO_ENV: str = "sandbox"
@@ -31,7 +32,7 @@ class Settings(BaseSettings):
     # Secret para validar assinatura HMAC do webhook do Mercado Pago
     # Configurar em: MP Dashboard → Suas integrações → Webhooks → Chave secreta
     MERCADOPAGO_WEBHOOK_SECRET: str = ""
-    
+
     # CORS
     CORS_ORIGINS: str = "http://localhost:3000,http://localhost:5173"
 
@@ -44,6 +45,19 @@ class Settings(BaseSettings):
     # Logs
     LOG_LEVEL: str = "DEBUG"
 
+    # Monitoramento de erros (Sentry) — opcional
+    SENTRY_DSN: str = ""
+
+    @model_validator(mode="after")
+    def validar_producao(self) -> "Settings":
+        """Garante que variáveis críticas estão configuradas em produção."""
+        if self.ENVIRONMENT == "production" and not self.MERCADOPAGO_WEBHOOK_SECRET:
+            raise ValueError(
+                "MERCADOPAGO_WEBHOOK_SECRET é obrigatório em ENVIRONMENT=production. "
+                "Configure em: MP Dashboard → Suas integrações → Webhooks → Chave secreta"
+            )
+        return self
+
     @property
     def cors_origins_list(self) -> List[str]:
         """Converte string de CORS_ORIGINS em lista"""
@@ -53,7 +67,7 @@ class Settings(BaseSettings):
     def admin_emails_list(self) -> List[str]:
         """Converte string de ADMIN_EMAILS em lista"""
         return [e.strip().lower() for e in self.ADMIN_EMAILS.split(",") if e.strip()]
-    
+
     class Config:
         env_file = ".env"
         case_sensitive = True

@@ -5,6 +5,9 @@ from slowapi.errors import RateLimitExceeded
 from app.config import settings
 from app.core.limiter import limiter
 import logging
+import sentry_sdk
+from sentry_sdk.integrations.fastapi import FastApiIntegration
+from sentry_sdk.integrations.httpx import HttpxIntegration
 from app.api import transacoes
 
 # ====================================
@@ -30,6 +33,19 @@ logging.basicConfig(
     level=getattr(logging, settings.LOG_LEVEL),
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
+
+# Inicializar Sentry (monitoramento de erros)
+if settings.SENTRY_DSN:
+    sentry_sdk.init(
+        dsn=settings.SENTRY_DSN,
+        environment=settings.ENVIRONMENT,
+        integrations=[
+            FastApiIntegration(),
+            HttpxIntegration(),
+        ],
+        traces_sample_rate=0.1,  # 10% de requests rastreados para performance
+        send_default_pii=False,  # não enviar dados pessoais
+    )
 
 logger = logging.getLogger(__name__)
 
