@@ -7,6 +7,7 @@ from pydantic import BaseModel
 from typing import Dict
 from app.core.supabase import supabase_admin as supabase
 from app.api.deps import get_current_user
+from app.services.bolao_service import BolaoService
 import logging
 import traceback
 
@@ -292,7 +293,7 @@ async def meus_resultados(
                 continue
 
             bolao = boloes_map[bid]
-            is_teimosinha = bolao.get("concurso_fim") and bolao["concurso_fim"] > bolao["concurso_numero"]
+            is_teimosinha = BolaoService.is_teimosinha(bolao)
 
             # Calcular quantidade de cotas do usuário
             vc = float(bolao.get("valor_cota", 0))

@@ -8,6 +8,7 @@ from app.core.supabase import supabase_admin as supabase
 from app.schemas.bolao import BolaoResponse, JogosResponse
 from app.schemas.admin import BolaoCreateAdmin
 from app.api.deps import get_current_user_optional
+from app.services.bolao_service import BolaoService
 
 router = APIRouter()
 
@@ -187,7 +188,7 @@ async def ver_resultado_publico(bolao_id: str):
         )
 
     bolao = bolao_result.data[0] if isinstance(bolao_result.data, list) else bolao_result.data
-    is_teimosinha = bolao.get("concurso_fim") and bolao["concurso_fim"] > bolao["concurso_numero"]
+    is_teimosinha = BolaoService.is_teimosinha(bolao)
 
     if is_teimosinha:
         # Buscar resultados por concurso
