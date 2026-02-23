@@ -6,6 +6,7 @@ from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel
 from typing import Optional
 from app.core.supabase import supabase_admin as supabase
+from app.core.security import create_access_token
 from app.config import settings
 import logging
 import httpx
@@ -173,13 +174,14 @@ class LoginResponse(BaseModel):
     nome: str
     email: str
     is_admin: bool = False
+    access_token: str
 
 
 @router.post("/login", response_model=LoginResponse)
 async def login_usuario(request: LoginRequest):
     """
     Autentica um usuário com e-mail e senha via Supabase Auth.
-    Retorna o UUID do usuário para uso como Bearer token.
+    Retorna um JWT assinado para uso como Bearer token.
     """
 
     if not request.email or not request.email.strip():
@@ -254,11 +256,19 @@ async def login_usuario(request: LoginRequest):
 
     is_admin = user_email.lower() in settings.admin_emails_list
 
+    # Gerar JWT assinado com SECRET_KEY
+    access_token = create_access_token(
+        user_id=usuario_id,
+        email=user_email,
+        is_admin=is_admin,
+    )
+
     return LoginResponse(
         id=usuario_id,
         nome=nome,
         email=user_email,
         is_admin=is_admin,
+        access_token=access_token,
     )
 
 
