@@ -28,6 +28,9 @@ class Settings(BaseSettings):
     MERCADOPAGO_ACCESS_TOKEN: str = ""
     MERCADOPAGO_ENV: str = "sandbox"
     WEBHOOK_URL: str = ""
+    # Secret para validar assinatura HMAC do webhook do Mercado Pago
+    # Configurar em: MP Dashboard → Suas integrações → Webhooks → Chave secreta
+    MERCADOPAGO_WEBHOOK_SECRET: str = ""
     
     # CORS
     CORS_ORIGINS: str = "http://localhost:3000,http://localhost:5173"

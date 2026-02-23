@@ -2,9 +2,8 @@
 Rotas de transações
 """
 
-from fastapi import APIRouter, HTTPException, status, Query
-from typing import List, Optional
-from datetime import datetime
+from fastapi import APIRouter, HTTPException, status, Query, Depends
+from typing import Optional
 
 from app.core.supabase import supabase_admin as supabase
 from app.api.deps import get_current_user_id
@@ -14,30 +13,19 @@ router = APIRouter(prefix="/transacoes", tags=["Transações"])
 
 @router.get("/")
 async def listar_transacoes(
-    usuario_id: str = Query(None, description="ID do usuário (opcional se autenticado)"),
     tipo: Optional[str] = Query(None, description="Filtrar por tipo: credito ou debito"),
-    skip: int = Query(0, ge=0),
-    limit: int = Query(50, ge=1, le=100)
+    limit: int = Query(50, ge=1, le=100),
+    current_user_id: str = Depends(get_current_user_id),
 ):
     """
-    Lista as transações do usuário autenticado ou especificado.
-    
+    Lista as transações do usuário autenticado.
+
     Retorna as transações ordenadas da mais recente para a mais antiga.
     """
-    
-    # Se não passou usuario_id, pegar do token (implementar depois)
-    # Por enquanto, aceitar via query param
-    if not usuario_id:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="usuario_id é obrigatório"
-        )
-    
+
     try:
-        # Construir query
-        query = supabase.table("transacoes").select("*").eq("usuario_id", usuario_id)
-        
-        # Filtrar por tipo se especificado
+        query = supabase.table("transacoes").select("*").eq("usuario_id", current_user_id)
+
         if tipo:
             if tipo not in ["credito", "debito"]:
                 raise HTTPException(
@@ -45,16 +33,13 @@ async def listar_transacoes(
                     detail="tipo deve ser 'credito' ou 'debito'"
                 )
             query = query.eq("tipo", tipo)
-        
-        # Ordenar e paginar
+
         query = query.order("created_at", desc=True).limit(limit)
-        
-        # Executar
+
         response = query.execute()
-        
-        # Formatar resposta
+
         transacoes = []
-        for t in response.data:
+        for t in (response.data or []):
             transacoes.append({
                 "id": t["id"],
                 "tipo": t["tipo"],
@@ -66,9 +51,11 @@ async def listar_transacoes(
                 "status": t["status"],
                 "created_at": t["created_at"],
             })
-        
+
         return transacoes
-        
+
+    except HTTPException:
+        raise
     except Exception as e:
         print(f"❌ Erro ao listar transações: {str(e)}")
         raise HTTPException(
@@ -79,17 +66,18 @@ async def listar_transacoes(
 
 @router.get("/resumo")
 async def resumo_transacoes(
-    usuario_id: str = Query(..., description="ID do usuário")
+    current_user_id: str = Depends(get_current_user_id),
 ):
     """
     Retorna resumo das transações agrupadas por tipo e origem.
     """
 
     try:
-        # Buscar todas as transações do usuário
-        response = supabase.table("transacoes").select("tipo, valor, origem").eq("usuario_id", usuario_id).execute()
+        response = supabase.table("transacoes")\
+            .select("tipo, valor, origem")\
+            .eq("usuario_id", current_user_id)\
+            .execute()
 
-        # Calcular totais
         total_credito = 0
         total_debito = 0
         total_depositos = 0
@@ -120,6 +108,8 @@ async def resumo_transacoes(
             "saldo_movimentado": round(total_credito - total_debito, 2),
         }
 
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

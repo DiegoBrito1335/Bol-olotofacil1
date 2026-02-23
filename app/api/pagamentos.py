@@ -69,44 +69,44 @@ async def webhook_mercadopago(
     background_tasks: BackgroundTasks
 ):
     """
-    Webhook do Mercado Pago para notificações de pagamento
-    
-    Quando um pagamento é confirmado, o Mercado Pago envia
-    uma notificação para essa URL. Processamos em background
-    para não bloquear a resposta.
-    
-    Returns:
-        Status 200 OK (sempre, para não reenviar notificação)
+    Webhook do Mercado Pago para notificações de pagamento.
+
+    Segurança:
+    - C3: Verifica assinatura HMAC (x-signature) quando MERCADOPAGO_WEBHOOK_SECRET estiver configurado
+    - Sempre retorna 200 para evitar reenvios do MP
     """
     try:
-        # Pega os dados do webhook
         body = await request.json()
-        
         logger.info(f"Webhook recebido: {body}")
-        
-        # Extrai o ID do pagamento
-        payment_id = None
-        
-        if body.get("type") == "payment":
-            payment_id = body.get("data", {}).get("id")
-        
+
+        if body.get("type") != "payment":
+            return {"status": "ignored"}
+
+        payment_id = body.get("data", {}).get("id")
+
         if not payment_id:
             logger.warning("Webhook sem payment_id, ignorando")
             return {"status": "ignored"}
-        
-        # Processa em background para não bloquear
+
+        # C3 — Verificar assinatura HMAC do Mercado Pago
+        x_signature = request.headers.get("x-signature", "")
+        x_request_id = request.headers.get("x-request-id", "")
+
+        if not PagamentoService.verificar_assinatura_mp(x_signature, x_request_id, str(payment_id)):
+            logger.error(f"Assinatura inválida no webhook para payment_id={payment_id}")
+            # Retorna 200 para não expor a rejeição, mas não processa
+            return {"status": "ignored"}
+
         background_tasks.add_task(
             PagamentoService.processar_webhook_pagamento,
             str(payment_id)
         )
-        
+
         logger.info(f"Webhook agendado para processamento: {payment_id}")
-        
         return {"status": "ok"}
-        
+
     except Exception as e:
         logger.error(f"Erro ao processar webhook: {str(e)}")
-        # Sempre retorna 200 para não reenviar
         return {"status": "error", "message": str(e)}
 
 
