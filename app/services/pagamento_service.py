@@ -280,37 +280,20 @@ class PagamentoService:
                 logger.warning(f"Pagamento {payment_id} não atualizável — já processado por outro worker")
                 return True
 
-            # Creditar na carteira
-            cart_result = supabase.table("carteira")\
-                .select("saldo_disponivel")\
-                .eq("usuario_id", usuario_id)\
-                .execute()
-
-            if not cart_result.data:
-                logger.error(f"Carteira não encontrada para usuário {usuario_id}")
-                return False
-
-            saldo_anterior = float(cart_result.data[0]["saldo_disponivel"])
-            saldo_posterior = round(saldo_anterior + valor, 2)
-
-            supabase.table("carteira")\
-                .update({"saldo_disponivel": saldo_posterior})\
-                .eq("usuario_id", usuario_id)\
-                .execute()
-
-            supabase.table("transacoes").insert({
-                "usuario_id": usuario_id,
-                "tipo": "credito",
-                "valor": valor,
-                "origem": "pix",
-                "referencia_id": str(payment_id),
-                "descricao": f"Depósito via Pix - ID {payment_id}",
-                "saldo_anterior": saldo_anterior,
-                "saldo_posterior": saldo_posterior,
-                "status": "confirmado"
+            # C5 — Creditar via RPC atômico (UPDATE carteira + INSERT transacao em uma transação SQL)
+            rpc_result = supabase.rpc("creditar_carteira", {
+                "p_usuario_id": usuario_id,
+                "p_valor": valor,
+                "p_origem": "pix",
+                "p_referencia_id": str(payment_id),
+                "p_descricao": f"Depósito via Pix - ID {payment_id}",
             }).execute()
 
-            logger.info(f"✅ Pagamento {payment_id} processado. Saldo: R${saldo_anterior} → R${saldo_posterior}")
+            if rpc_result.error:
+                logger.error(f"Erro no RPC creditar_carteira para {payment_id}: {rpc_result.error}")
+                return False
+
+            logger.info(f"✅ Pagamento {payment_id} processado. R${valor} creditado para {usuario_id}")
             return True
 
         except Exception as e:
@@ -359,36 +342,20 @@ class PagamentoService:
                 logger.warning(f"Pagamento {external_id} já processado por outro processo")
                 return True
 
-            cart_result = supabase.table("carteira")\
-                .select("saldo_disponivel")\
-                .eq("usuario_id", usuario_id)\
-                .execute()
-
-            if not cart_result.data:
-                logger.error("Carteira não encontrada")
-                return False
-
-            saldo_anterior = float(cart_result.data[0]["saldo_disponivel"])
-            saldo_posterior = round(saldo_anterior + valor, 2)
-
-            supabase.table("carteira")\
-                .update({"saldo_disponivel": saldo_posterior})\
-                .eq("usuario_id", usuario_id)\
-                .execute()
-
-            supabase.table("transacoes").insert({
-                "usuario_id": usuario_id,
-                "tipo": "credito",
-                "valor": valor,
-                "origem": "pix",
-                "referencia_id": external_id,
-                "descricao": f"Depósito via Pix (SIMULADO) - ID {external_id}",
-                "saldo_anterior": saldo_anterior,
-                "saldo_posterior": saldo_posterior,
-                "status": "confirmado"
+            # C5 — Creditar via RPC atômico
+            rpc_result = supabase.rpc("creditar_carteira", {
+                "p_usuario_id": usuario_id,
+                "p_valor": valor,
+                "p_origem": "pix",
+                "p_referencia_id": external_id,
+                "p_descricao": f"Depósito via Pix (SIMULADO) - ID {external_id}",
             }).execute()
 
-            logger.info(f"✅ Pagamento SIMULADO confirmado! Saldo: R$ {saldo_anterior} → R$ {saldo_posterior}")
+            if rpc_result.error:
+                logger.error(f"Erro no RPC creditar_carteira para {external_id}: {rpc_result.error}")
+                return False
+
+            logger.info(f"✅ Pagamento SIMULADO confirmado! R${valor} creditado para {usuario_id}")
             return True
 
         except Exception as e:

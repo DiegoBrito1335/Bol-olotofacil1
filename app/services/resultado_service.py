@@ -183,38 +183,19 @@ class ResultadoService:
             if premio_usuario <= 0:
                 continue
 
-            # Buscar carteira do usuário
-            cart_result = supabase.table("carteira")\
-                .select("*")\
-                .eq("usuario_id", usuario_id)\
-                .execute()
-
-            if not cart_result.data:
-                logger.warning(f"Carteira não encontrada para usuário {usuario_id}")
-                continue
-
-            carteira = cart_result.data[0]
-            saldo_anterior = float(carteira["saldo_disponivel"])
-            saldo_posterior = round(saldo_anterior + premio_usuario, 2)
-
-            # Atualizar saldo
-            supabase.table("carteira")\
-                .update({"saldo_disponivel": saldo_posterior})\
-                .eq("usuario_id", usuario_id)\
-                .execute()
-
-            # Criar transação
-            supabase.table("transacoes").insert({
-                "usuario_id": usuario_id,
-                "tipo": "credito",
-                "valor": premio_usuario,
-                "origem": "premio_bolao",
-                "referencia_id": bolao_id,
-                "descricao": f"Prêmio {bolao_nome} - Concurso {concurso_numero} ({qtd_cotas} cota{'s' if qtd_cotas > 1 else ''})",
-                "saldo_anterior": saldo_anterior,
-                "saldo_posterior": saldo_posterior,
-                "status": "confirmado",
+            # C5 — Creditar prêmio via RPC atômico (UPDATE carteira + INSERT transacao em uma transação SQL)
+            descricao = f"Prêmio {bolao_nome} - Concurso {concurso_numero} ({qtd_cotas} cota{'s' if qtd_cotas > 1 else ''})"
+            rpc_result = supabase.rpc("creditar_carteira", {
+                "p_usuario_id": usuario_id,
+                "p_valor": premio_usuario,
+                "p_origem": "premio_bolao",
+                "p_referencia_id": bolao_id,
+                "p_descricao": descricao,
             }).execute()
+
+            if rpc_result.error:
+                logger.error(f"Erro no RPC creditar_carteira para usuário {usuario_id}: {rpc_result.error}")
+                continue
 
             logger.info(f"Prêmio R$ {premio_usuario} creditado para usuário {usuario_id} (concurso {concurso_numero})")
 
