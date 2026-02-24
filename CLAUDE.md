@@ -36,11 +36,12 @@ Routes (app/api/) → Services (app/services/) → Supabase HTTP Client (app/cor
 Schemas (app/schemas/) provide Pydantic validation at the route layer.
 ```
 
-- `app/main.py` — FastAPI app, CORS, router registration, health check (`GET /`). `redirect_slashes=False`.
-- `app/config.py` — Pydantic Settings loaded from `.env`. Properties: `cors_origins_list`, `admin_emails_list` parse comma-separated env vars. Also has `FRONTEND_URL` (used in email links).
-- `app/api/deps.py` — Auth dependency injection (user auth + admin check)
+- `app/main.py` — FastAPI app, CORS, rate limiter, Sentry, router registration, health check (`GET /`). `redirect_slashes=False`.
+- `app/config.py` — Pydantic Settings loaded from `.env`. Properties: `cors_origins_list`, `admin_emails_list`. Has `model_validator` that enforces `MERCADOPAGO_WEBHOOK_SECRET` in production.
+- `app/api/deps.py` — Auth dependency injection (JWT verification + admin check)
 - `app/api/v1/admin/` — Admin-only routes (pool CRUD, games, apuração, stats)
-- `app/core/security.py` — Placeholder (JWT validation not yet implemented)
+- `app/core/security.py` — JWT creation (`create_access_token`) and verification (`verify_token`) using HS256 + SECRET_KEY
+- `app/core/limiter.py` — slowapi rate limiter (key: remote IP)
 
 ### Data access pattern
 
@@ -61,34 +62,48 @@ Two global client instances (imported from `app.core.supabase`):
 - `supabase` — uses the anon key (public/user-level access)
 - `supabase_admin` — uses the service role key (bypasses RLS)
 
-All admin and service-layer code uses `supabase_admin` to bypass Row Level Security. Complex atomic operations use Supabase RPC functions (e.g., `comprar_cota` for quota purchases).
+All admin and service-layer code uses `supabase_admin` to bypass Row Level Security. Complex atomic operations use Supabase RPC functions.
 
 ### Authentication and authorization
 
-Currently in **test/development mode**: the `Authorization: Bearer {user_id}` header passes the Supabase user UUID directly (no JWT validation). Auth dependencies in `app/api/deps.py`:
-- `get_current_user_id()` — required, raises 401 if missing
-- `get_current_user_optional()` — returns None if unauthenticated
-- `get_current_user()` — returns `{"id": user_id}` dict
-- `get_admin_user()` — verifies user email is in `ADMIN_EMAILS` whitelist by calling the Supabase Auth Admin API, raises 403 if not authorized
+**JWT HS256** — fully implemented. The `Authorization: Bearer {token}` header carries a signed JWT (not a raw UUID).
 
-Admin routes use `dependencies=[Depends(get_admin_user)]` to protect them. The `ADMIN_EMAILS` env var is a comma-separated list of authorized emails (configured in `app/config.py` with defaults).
+- `app/core/security.py`:
+  - `create_access_token(user_id, email, is_admin)` — generates JWT with 12h expiration
+  - `verify_token(token)` — decodes and validates signature + expiration; raises `ValueError` on failure
+- `app/api/deps.py`:
+  - `get_current_user_id()` — required, raises 401 if token missing/invalid
+  - `get_current_user_optional()` — returns None if unauthenticated
+  - `get_current_user()` — returns `{"id": user_id}` dict
+  - `get_admin_user()` — verifies `is_admin` claim in JWT payload; raises 403 if not admin
 
-Registration and login endpoints in `app/api/auth.py` use the Supabase Auth API directly via httpx. The login response includes an `is_admin` flag.
+Admin routes use `dependencies=[Depends(get_admin_user)]`. The `is_admin` flag is embedded in the JWT at login time based on `ADMIN_EMAILS` env var — no database call needed per request.
 
 ### Auth flow (email confirmation + password recovery)
 
-Registration uses `POST /auth/v1/signup` (Supabase anon key) with `redirect_to={FRONTEND_URL}/confirmar-email` so the confirmation email links to the correct page. Email duplicate detection: Supabase returns HTTP 400, or HTTP 200 with `identities == []`.
+Registration uses `POST /auth/v1/signup` (Supabase anon key) with `redirect_to={FRONTEND_URL}/confirmar-email`. Email duplicate detection: Supabase returns HTTP 400, or HTTP 200 with `identities == []`.
 
-Login returns 403 with `detail="EMAIL_NOT_CONFIRMED"` if the user hasn't confirmed the email yet.
+Login returns 403 with `detail="EMAIL_NOT_CONFIRMED"` if the user hasn't confirmed email yet. On success, returns a signed JWT and `is_admin` flag.
 
 Password recovery:
-- `POST /api/v1/auth/forgot-password` — calls `/auth/v1/recover` with `redirect_to={FRONTEND_URL}/redefinir-senha`. Always returns 200 (doesn't reveal if email exists).
+- `POST /api/v1/auth/forgot-password` — calls `/auth/v1/recover` with `redirect_to={FRONTEND_URL}/redefinir-senha`. Always returns 200 (doesn't reveal if email exists). Rate limited: 3/min.
 - `POST /api/v1/auth/reset-password` — calls `PUT /auth/v1/user` with `Authorization: Bearer {access_token}` from the recovery email link.
 
-Supabase Dashboard must have "Enable email confirmations" ON and the following Redirect URLs configured:
-- `https://bolao-lotofacil.vercel.app/**`
+Supabase Dashboard must have "Enable email confirmations" ON and Redirect URLs:
+- `https://www.boloeslotofacil.com/**`
+- `https://boloeslotofacil.com/**`
 - `http://localhost:3000/**`
 - `http://localhost:5173/**`
+
+### Rate limiting
+
+`slowapi` with `get_remote_address` as key function. Registered in `app/main.py`.
+
+| Endpoint | Limit |
+|----------|-------|
+| `POST /auth/login` | 10/min |
+| `POST /auth/forgot-password` | 3/min |
+| `POST /pagamentos/webhook/mercadopago` | 60/min |
 
 ### API route prefixes
 
@@ -98,15 +113,15 @@ All routes are under `/api/v1/`:
 - `/api/v1/cotas` — quota management and purchase
 - `/api/v1/carteira` — wallet balance
 - `/api/v1/pagamentos` — Pix payment creation and webhooks
-- `/api/v1/transacoes` — transaction history
+- `/api/v1/transacoes` — transaction history (requires auth; user sees only own records)
 - `/api/v1/perfil` — user profile (nome, telefone, chave_pix). Auto-creates profile+carteira if missing.
 - `/api/v1/admin/boloes` — admin pool CRUD, game management, apuração
 - `/api/v1/admin/stats` — dashboard statistics and activity feed
-- `/api/v1/cron` — cron endpoints (fechar-boloes, apurar-resultados). Protected by `SECRET_KEY`.
+- `/api/v1/cron` — cron endpoints (fechar-boloes, apurar-resultados). Protected by `X-Cron-Secret` header only.
 
 ### Key features
 
-**Game management (jogos):** Admins add lottery games (exactly 15 numbers from 1-25) to pools via `POST /admin/boloes/{id}/jogos`. Numbers are validated and stored sorted.
+**Game management (jogos):** Admins add lottery games (exactly 15 numbers from 1-25) via `POST /admin/boloes/{id}/jogos`. Numbers are validated and stored sorted.
 
 **Result appraisal (apuração):** Two modes:
 - **Automatic:** `POST /admin/boloes/{id}/apurar/automatico` — fetches drawn numbers from the Lotofácil API and calculates hits per game
@@ -115,15 +130,22 @@ All routes are under `/api/v1/`:
 Both update each game's `acertos` (hit count) and set the pool status to `apurado`.
 
 **Lotofácil API — dual source with fallback** (`app/services/resultado_service.py`):
-- Primary: `https://servicebus2.caixa.gov.br/portaldeloterias/api/lotofacil/{concurso}` (official Caixa API, field `listaDezenas` / `listaRateioPremio`)
+- Primary: `https://servicebus2.caixa.gov.br/portaldeloterias/api/lotofacil/{concurso}` (field `listaDezenas` / `listaRateioPremio`)
 - Fallback: `https://loteriascaixa-api.herokuapp.com/api/lotofacil/{concurso}` (field `dezenas` / `premiacoes`)
 - Timeout: 30s. Prize mapping: `acertos = 16 - faixa` (faixa 1 = 15 hits, faixa 5 = 11 hits).
 
-**Cron jobs** (`app/api/cron.py`): Protected by `SECRET_KEY` via header `X-Cron-Secret` **or** query param `?secret=`. Scheduled on cron-job.org:
+**Cron jobs** (`app/api/cron.py`): Protected by `SECRET_KEY` via **header only** (`X-Cron-Secret`). Query param support was removed (would expose secret in logs). Scheduled on cron-job.org:
 - `POST /cron/fechar-boloes` — closes all `aberto` pools (run at 20:55)
 - `POST /cron/apurar-resultados` — appraises all pending pools (run `*/15 21,22 * * *`)
 
-**Payment flow:** Pix payments go through Mercado Pago (`app/services/pagamento_service.py`). In development mode (`ENVIRONMENT=development`), payments are simulated with fake QR codes. In production, real Mercado Pago API calls are made. The webhook endpoint is `/api/v1/pagamentos/webhook/mercadopago`.
+**Payment flow:** Pix payments go through Mercado Pago (`app/services/pagamento_service.py`).
+- If `MERCADOPAGO_ACCESS_TOKEN` is not set **or** `MERCADOPAGO_ENV=sandbox` **or** `ENVIRONMENT=development` → uses simulated fake QR codes (development mode)
+- Otherwise → calls real Mercado Pago API
+- Webhook at `/api/v1/pagamentos/webhook/mercadopago` verifies HMAC-SHA256 signature (`x-signature` header), checks idempotency, verifies paid amount via MP API, and credits wallet via atomic RPC.
+
+**Note:** Pix real money is currently NOT active. `MERCADOPAGO_ACCESS_TOKEN` is not configured on Render — all payments generate fake QR codes. To activate: set `MERCADOPAGO_ACCESS_TOKEN` (production token) and `MERCADOPAGO_ENV=production` on Render and configure webhook in MP dashboard.
+
+**Also note:** The payer email in `_criar_pix_mercadopago` is currently hardcoded as `test_user@test.com` — must be fixed before activating real Pix.
 
 ### Supabase tables
 
@@ -144,26 +166,81 @@ Pool statuses: `aberto`, `fechado`, `apurado`, `cancelado`
 
 **Important:** The column `resultado_dezenas` does NOT exist in `boloes`. All drawn numbers are stored in `resultados_concurso`.
 
+### Database constraints (Supabase)
+
+Applied via SQL migrations (already in production):
+
+**Indexes:**
+- `idx_cotas_usuario_id`, `idx_cotas_bolao_id`
+- `idx_jogos_bolao_bolao_id`
+- `idx_resultados_concurso_bolao` (bolao_id, concurso_numero)
+- `idx_acertos_concurso_bolao` (bolao_id, concurso_numero)
+- `idx_pagamentos_external_id`
+- `idx_transacoes_usuario_id`
+
+**Unique constraint:** `uq_resultado_bolao_concurso` on `resultados_concurso(bolao_id, concurso_numero)` — prevents duplicate appraisals.
+
+**Check constraints:**
+- `chk_saldo_nao_negativo`: `carteira.saldo_disponivel >= 0`
+- `chk_cotas_nao_negativas`: `boloes.cotas_disponiveis >= 0`
+- `chk_valor_cota_positivo`: `boloes.valor_cota > 0`
+- `chk_dezenas_length`: `array_length(jogos_bolao.dezenas, 1) = 15`
+
+**Foreign keys:** `cotas→boloes`, `cotas→usuarios`, `jogos_bolao→boloes`, `acertos_concurso→jogos_bolao`, `resultados_concurso→boloes`, `pagamentos_pix→usuarios`
+
+**Trigger:** `trg_transacoes_immutable` — `BEFORE UPDATE OR DELETE` on `transacoes` raises exception. Transactions are append-only (audit log).
+
 ### RPC functions
 
-- `comprar_cota(p_usuario_id, p_bolao_id, p_quantidade)` — atomic quota purchase (debit wallet, create cota, update pool)
+- `comprar_cota(p_usuario_id, p_bolao_id, p_quantidade)` — atomic quota purchase (debit wallet, create cota, update pool availability)
+- `creditar_carteira(p_usuario_id, p_valor, p_origem, p_referencia_id, p_descricao)` — atomic credit (UPDATE carteira + INSERT transacao in one SQL transaction). Used for Pix deposits and prize distribution.
 - `buscar_minhas_cotas(p_usuario_id)` — get user's quotas (SECURITY DEFINER to bypass RLS)
+
+**All financial operations use RPCs — never raw SELECT+calculate+UPDATE.**
+
+### Monitoring
+
+Sentry is integrated in `app/main.py` (FastAPI + httpx integrations). Activated when `SENTRY_DSN` env var is set. `traces_sample_rate=0.1`, `send_default_pii=False`.
 
 ## Environment Setup (Local)
 
 Copy `.env.example` to `.env` and fill in values. Required variables:
 - `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`
-- `SECRET_KEY`
+- `SECRET_KEY` (long random string — used for JWT signing AND cron authentication)
 - `FRONTEND_URL` (default: `http://localhost:3000`) — used in email confirmation and password recovery links
 
-Optional: `MERCADOPAGO_ACCESS_TOKEN`, `MERCADOPAGO_ENV`, `WEBHOOK_URL`, `CORS_ORIGINS`, `LOG_LEVEL`, `ADMIN_EMAILS`
+Optional: `MERCADOPAGO_ACCESS_TOKEN`, `MERCADOPAGO_ENV`, `WEBHOOK_URL`, `CORS_ORIGINS`, `LOG_LEVEL`, `ADMIN_EMAILS`, `SENTRY_DSN`
+
+**Note:** `MERCADOPAGO_WEBHOOK_SECRET` is **required** when `ENVIRONMENT=production`. The `model_validator` in `app/config.py` raises a startup error if it's missing in production.
 
 Frontend dev server runs on port 3000 and proxies `/api` to this backend on port 8000.
 
 ## Deployment
 
-**Production**: Render (free tier) — `https://bolao-lotofacil-api.onrender.com`. Free tier sleeps after 15 min inactivity (~30s cold start).
+**Production**: Render — `https://bolao-lotofacil-api.onrender.com`. Free tier sleeps after 15 min inactivity (~30s cold start).
 
-`GET /` health check returns `{"status": "ok"}`. Config: `Procfile` (Render/Heroku), `railway.toml` (unused — Railway trial was unreliable).
+`GET /` health check returns `{"status": "ok"}`. Config: `Procfile`.
 
-Production env vars: `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `SECRET_KEY`, `ENVIRONMENT=production`, `CORS_ORIGINS`, `LOG_LEVEL=INFO`, `FRONTEND_URL=https://bolao-lotofacil.vercel.app`.
+### Render environment variables (production)
+
+| Variable | Status | Notes |
+|----------|--------|-------|
+| `SUPABASE_URL` | ✅ set | |
+| `SUPABASE_ANON_KEY` | ✅ set | |
+| `SUPABASE_SERVICE_ROLE_KEY` | ✅ set | |
+| `SECRET_KEY` | ✅ set | Used for JWT + cron auth |
+| `ENVIRONMENT` | ✅ `production` | |
+| `CORS_ORIGINS` | ✅ set | `https://boloeslotofacil.com,https://www.boloeslotofacil.com` |
+| `ADMIN_EMAILS` | ✅ set | Comma-separated, no hardcoded default in code |
+| `FRONTEND_URL` | ✅ set | `https://www.boloeslotofacil.com` |
+| `MERCADOPAGO_WEBHOOK_SECRET` | ✅ set | Placeholder — swap for real MP secret when Pix is activated |
+| `SENTRY_DSN` | ✅ set | Backend DSN from Sentry FastAPI project |
+| `MERCADOPAGO_ACCESS_TOKEN` | ❌ not set | Required to activate real Pix payments |
+| `MERCADOPAGO_ENV` | ❌ not set | Set to `production` when activating real Pix |
+
+### Frontend (Vercel)
+
+| Variable | Status | Notes |
+|----------|--------|-------|
+| `VITE_API_URL` | ✅ set | Points to Render backend |
+| `VITE_SENTRY_DSN` | ✅ set | Frontend DSN from Sentry React project |
