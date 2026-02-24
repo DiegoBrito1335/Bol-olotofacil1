@@ -246,7 +246,7 @@ async def login_usuario(request: Request, body: LoginRequest):
     auth_data = auth_response.json()
     user = auth_data.get("user", {})
     usuario_id = user.get("id")
-    user_email = user.get("email", request.email)
+    user_email = user.get("email", body.email)
 
     # Buscar nome do perfil
     perfil = supabase.table("usuarios").select("nome").eq("id", usuario_id).execute()
