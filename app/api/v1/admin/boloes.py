@@ -489,8 +489,8 @@ async def upload_jogos_csv(bolao_id: str, file: UploadFile = File(...)):
             continue
 
         # Validações
-        if len(numeros) != 15:
-            erros.append(f"Linha {i}: {len(numeros)} números (esperado 15)")
+        if not (15 <= len(numeros) <= 18):
+            erros.append(f"Linha {i}: {len(numeros)} números (esperado entre 15 e 18)")
             continue
 
         fora_range = [n for n in numeros if n < 1 or n > 25]
@@ -498,7 +498,7 @@ async def upload_jogos_csv(bolao_id: str, file: UploadFile = File(...)):
             erros.append(f"Linha {i}: números fora do range 1-25: {fora_range}")
             continue
 
-        if len(set(numeros)) != 15:
+        if len(set(numeros)) != len(numeros):
             erros.append(f"Linha {i}: números duplicados")
             continue
 

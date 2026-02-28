@@ -36,6 +36,8 @@ Routes (app/api/) → Services (app/services/) → Supabase HTTP Client (app/cor
 Schemas (app/schemas/) provide Pydantic validation at the route layer.
 ```
 
+**File organization:** Public route files live at `app/api/*.py` (auth, boloes, cotas, etc.). Admin routes are at `app/api/v1/admin/` (boloes.py, stats.py). The `/api/v1/` URL prefix is applied in `main.py` via `include_router(..., prefix=...)` — it is NOT reflected in the directory structure of public routes.
+
 - `app/main.py` — FastAPI app, CORS, rate limiter, Sentry, router registration, health check (`GET /`). `redirect_slashes=False`.
 - `app/config.py` — Pydantic Settings loaded from `.env`. Properties: `cors_origins_list`, `admin_emails_list`. Has `model_validator` that enforces `MERCADOPAGO_WEBHOOK_SECRET` in production.
 - `app/api/deps.py` — Auth dependency injection (JWT verification + admin check)
@@ -63,6 +65,8 @@ Two global client instances (imported from `app.core.supabase`):
 - `supabase_admin` — uses the service role key (bypasses RLS)
 
 All admin and service-layer code uses `supabase_admin` to bypass Row Level Security. Complex atomic operations use Supabase RPC functions.
+
+**Important:** `SupabaseHTTPClient` uses a synchronous `httpx.Client` internally. Service methods are declared `async def` for FastAPI compatibility, but their Supabase calls are synchronous and block the event loop. Keep this in mind for performance-sensitive routes.
 
 ### Authentication and authorization
 
@@ -120,6 +124,8 @@ All routes are under `/api/v1/`:
 - `/api/v1/cron` — cron endpoints (fechar-boloes, apurar-resultados). Protected by `X-Cron-Secret` header only.
 
 ### Key features
+
+**Teimosinha (multi-draw bolões):** A bolão is a teimosinha if `concurso_fim > concurso_numero` — it spans multiple consecutive Lotofácil draws. `BolaoService` provides helpers: `is_teimosinha(bolao)`, `total_concursos(bolao)`, `concursos_list(bolao)`. Each draw gets its own row in `resultados_concurso` and `acertos_concurso`. The bolão status becomes `apurado` only after all draws in the range are appraised.
 
 **Game management (jogos):** Admins add lottery games (exactly 15 numbers from 1-25) via `POST /admin/boloes/{id}/jogos`. Numbers are validated and stored sorted.
 

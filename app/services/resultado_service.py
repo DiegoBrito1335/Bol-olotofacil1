@@ -476,10 +476,13 @@ class ResultadoService:
             resultados.append(resultado)
             premio_total_geral += resultado.get("premio_total", 0)
 
-        # Verificar se todos os concursos foram apurados
+        # Verificar se todos os concursos foram apurados (conta diretamente na tabela resultados_concurso)
         total_concursos = BolaoService.total_concursos(bolao)
-        bolao_atualizado = supabase.table("boloes").select("concursos_apurados").eq("id", bolao_id).execute()
-        apurados = (bolao_atualizado.data[0].get("concursos_apurados") or 0) if bolao_atualizado.data else 0
+        apurados_result = supabase.table("resultados_concurso")\
+            .select("concurso_numero")\
+            .eq("bolao_id", bolao_id)\
+            .execute()
+        apurados = len(apurados_result.data or [])
 
         if apurados >= total_concursos:
             # Todos apurados — mudar status para "apurado"

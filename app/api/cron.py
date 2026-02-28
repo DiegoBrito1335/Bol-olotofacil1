@@ -9,6 +9,7 @@ from fastapi import APIRouter, HTTPException, Header, status
 from typing import Optional
 from app.core.supabase import supabase_admin as supabase
 from app.services.resultado_service import ResultadoService
+from app.services.bolao_service import BolaoService
 from app.config import settings
 import logging
 
@@ -63,16 +64,30 @@ async def cron_apurar_resultados(
             continue
 
         try:
-            resultado = await ResultadoService.apurar_pendentes(bolao_id)
-            novos = len(resultado.get("resultados", []))
+            if BolaoService.is_teimosinha(bolao):
+                resultado = await ResultadoService.apurar_todos_concursos(bolao_id)
+                novos = len(resultado.get("resultados", []))
+                premio_total = resultado.get("premio_total_geral", 0)
+            else:
+                concurso = bolao["concurso_numero"]
+                resultado_dezenas = await ResultadoService.buscar_resultado_api(concurso)
+                if not resultado_dezenas:
+                    logger.info(f"Cron: resultado do concurso {concurso} ainda não disponível")
+                    continue
+                resultado = await ResultadoService.apurar_bolao(bolao_id, resultado_dezenas)
+                if resultado.get("skipped"):
+                    continue
+                novos = 1
+                premio_total = resultado.get("premio_total", 0)
+
             if novos > 0:
                 resultados.append({
                     "bolao_id": bolao_id,
                     "nome": bolao["nome"],
                     "novos_apurados": novos,
-                    "premio_total": resultado.get("premio_total_geral", 0),
+                    "premio_total": premio_total,
                 })
-                logger.info(f"Cron: apurou {novos} concursos do bolão {bolao['nome']}")
+                logger.info(f"Cron: apurou {novos} concurso(s) do bolão {bolao['nome']}")
         except Exception as e:
             logger.error(f"Cron: erro ao apurar bolão {bolao_id}: {e}")
             resultados.append({

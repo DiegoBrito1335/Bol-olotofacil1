@@ -53,16 +53,16 @@ class BolaoUpdateAdmin(BaseModel):
 
 class JogoCreateAdmin(BaseModel):
     """Schema para adicionar um jogo a um bolão"""
-    dezenas: List[int] = Field(..., min_length=15, max_length=15)
+    dezenas: List[int] = Field(..., min_length=15, max_length=18)
 
     @field_validator('dezenas')
     @classmethod
     def validate_dezenas(cls, v):
-        if len(v) != 15:
-            raise ValueError('Lotofácil requer exatamente 15 números')
+        if not (15 <= len(v) <= 18):
+            raise ValueError('Lotofácil requer entre 15 e 18 números')
         if any(d < 1 or d > 25 for d in v):
             raise ValueError('Números devem estar entre 1 e 25')
-        if len(set(v)) != 15:
+        if len(set(v)) != len(v):
             raise ValueError('Números devem ser únicos')
         return sorted(v)
 
