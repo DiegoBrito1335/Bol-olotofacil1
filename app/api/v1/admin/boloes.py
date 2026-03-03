@@ -107,6 +107,7 @@ async def criar_bolao(
         "cotas_disponiveis": bolao_data.total_cotas,  # Inicialmente todas disponíveis
         "valor_cota": float(bolao_data.valor_cota),
         "status": bolao_data.status,
+        "tipo": bolao_data.tipo,
         "data_fechamento": bolao_data.data_fechamento.isoformat() if bolao_data.data_fechamento else None
     }
     
@@ -376,7 +377,7 @@ async def adicionar_jogos(bolao_id: str, data: JogosCreateBatchAdmin):
     Adiciona um ou mais jogos (dezenas) a um bolão.
     """
     # Verificar se bolão existe
-    existing = supabase.table("boloes").select("id, status").eq("id", bolao_id).execute()
+    existing = supabase.table("boloes").select("id, status, tipo").eq("id", bolao_id).execute()
 
     if not existing.data:
         raise HTTPException(
@@ -391,6 +392,28 @@ async def adicionar_jogos(bolao_id: str, data: JogosCreateBatchAdmin):
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Não é possível adicionar jogos a um bolão já apurado"
         )
+
+    # Validar dezenas baseado no tipo do bolão
+    tipo = bolao.get("tipo") or "lotofacil"
+    if tipo == "megasena":
+        min_nums, max_nums, max_val = 6, 20, 60
+        label = "Mega-Sena (6-20 números de 1-60)"
+    else:
+        min_nums, max_nums, max_val = 15, 18, 25
+        label = "Lotofácil (15-18 números de 1-25)"
+
+    for jogo in data.jogos:
+        if not (min_nums <= len(jogo.dezenas) <= max_nums):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"{label}: quantidade inválida ({len(jogo.dezenas)} números)"
+            )
+        fora = [d for d in jogo.dezenas if d < 1 or d > max_val]
+        if fora:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"{label}: números fora do range 1-{max_val}: {fora}"
+            )
 
     # Preparar dados para inserção batch
     jogos_insert = [
@@ -416,7 +439,7 @@ async def upload_jogos_csv(bolao_id: str, file: UploadFile = File(...)):
     Formato: um jogo por linha, 15 números separados por vírgula ou ponto-e-vírgula.
     """
     # Verificar bolão
-    existing = supabase.table("boloes").select("id, status").eq("id", bolao_id).execute()
+    existing = supabase.table("boloes").select("id, status, tipo").eq("id", bolao_id).execute()
 
     if not existing.data:
         raise HTTPException(
@@ -431,6 +454,13 @@ async def upload_jogos_csv(bolao_id: str, file: UploadFile = File(...)):
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Não é possível adicionar jogos a um bolão já apurado"
         )
+
+    # Configurar validação baseada no tipo do bolão
+    tipo_bolao = bolao.get("tipo") or "lotofacil"
+    if tipo_bolao == "megasena":
+        csv_min, csv_max, csv_max_val = 6, 20, 60
+    else:
+        csv_min, csv_max, csv_max_val = 15, 18, 25
 
     # Ler conteúdo do arquivo
     content = await file.read()
@@ -488,14 +518,14 @@ async def upload_jogos_csv(bolao_id: str, file: UploadFile = File(...)):
         if erro_linha:
             continue
 
-        # Validações
-        if not (15 <= len(numeros) <= 18):
-            erros.append(f"Linha {i}: {len(numeros)} números (esperado entre 15 e 18)")
+        # Validações (baseado no tipo do bolão)
+        if not (csv_min <= len(numeros) <= csv_max):
+            erros.append(f"Linha {i}: {len(numeros)} números (esperado entre {csv_min} e {csv_max})")
             continue
 
-        fora_range = [n for n in numeros if n < 1 or n > 25]
+        fora_range = [n for n in numeros if n < 1 or n > csv_max_val]
         if fora_range:
-            erros.append(f"Linha {i}: números fora do range 1-25: {fora_range}")
+            erros.append(f"Linha {i}: números fora do range 1-{csv_max_val}: {fora_range}")
             continue
 
         if len(set(numeros)) != len(numeros):
@@ -586,6 +616,22 @@ async def apurar_bolao_manual(bolao_id: str, resultado: ResultadoInput):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Este bolão já foi apurado"
+        )
+
+    # Validar quantidade de dezenas baseado no tipo
+    tipo = bolao.get("tipo") or "lotofacil"
+    esperado = 6 if tipo == "megasena" else 15
+    max_val = 60 if tipo == "megasena" else 25
+    if len(resultado.dezenas) != esperado:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Resultado deve ter exatamente {esperado} números para {tipo}"
+        )
+    fora = [d for d in resultado.dezenas if d < 1 or d > max_val]
+    if fora:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Números fora do range 1-{max_val}: {fora}"
         )
 
     # Verificar se tem jogos
@@ -879,6 +925,10 @@ async def ver_resultado(bolao_id: str):
         )
 
     bolao = bolao_result.data[0] if isinstance(bolao_result.data, list) else bolao_result.data
+    tipo_bolao = bolao.get("tipo") or "lotofacil"
+    cfg = ResultadoService._config_loteria(tipo_bolao)
+    min_acertos_premio = cfg['min_acertos_premio']
+    resumo_keys = cfg['resumo_keys']
 
     # Teimosinha: resultado por concurso
     if BolaoService.is_teimosinha(bolao):
@@ -904,14 +954,14 @@ async def ver_resultado(bolao_id: str):
             acertos_por_concurso[c].append(a)
 
         resultados_formatados = []
-        resumo_geral = {15: 0, 14: 0, 13: 0, 12: 0, 11: 0}
+        resumo_geral = {k: 0 for k in resumo_keys}
 
         for res in resultados:
             concurso = res["concurso_numero"]
             acertos_concurso = acertos_por_concurso.get(concurso, [])
 
             jogos_resultado = []
-            resumo = {15: 0, 14: 0, 13: 0, 12: 0, 11: 0}
+            resumo = {k: 0 for k in resumo_keys}
 
             for jogo in jogos:
                 acerto = next((a for a in acertos_concurso if a["jogo_id"] == jogo["id"]), None)
@@ -921,7 +971,7 @@ async def ver_resultado(bolao_id: str):
                     "dezenas": jogo["dezenas"],
                     "acertos": acertos_val,
                 })
-                if acertos_val >= 11:
+                if acertos_val >= min_acertos_premio:
                     resumo[acertos_val] = resumo.get(acertos_val, 0) + 1
                     resumo_geral[acertos_val] = resumo_geral.get(acertos_val, 0) + 1
 
@@ -972,9 +1022,9 @@ async def ver_resultado(bolao_id: str):
         for j in jogos
     ]
 
-    resumo = {15: 0, 14: 0, 13: 0, 12: 0, 11: 0}
+    resumo = {k: 0 for k in resumo_keys}
     for j in jogos_resultado:
-        if j["acertos"] >= 11:
+        if j["acertos"] >= min_acertos_premio:
             resumo[j["acertos"]] = resumo.get(j["acertos"], 0) + 1
 
     return {

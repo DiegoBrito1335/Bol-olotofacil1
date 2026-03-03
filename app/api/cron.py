@@ -36,7 +36,7 @@ async def cron_apurar_resultados(
 
     # Buscar bolões que não estão apurados nem cancelados
     boloes_result = supabase.table("boloes")\
-        .select("id, nome, concurso_numero, concurso_fim, status")\
+        .select("id, nome, concurso_numero, concurso_fim, status, tipo")\
         .in_("status", ["aberto", "fechado"])\
         .execute()
 
@@ -70,7 +70,8 @@ async def cron_apurar_resultados(
                 premio_total = resultado.get("premio_total_geral", 0)
             else:
                 concurso = bolao["concurso_numero"]
-                resultado_dezenas = await ResultadoService.buscar_resultado_api(concurso)
+                tipo = bolao.get("tipo") or "lotofacil"
+                resultado_dezenas = await ResultadoService.buscar_resultado_api(concurso, tipo)
                 if not resultado_dezenas:
                     logger.info(f"Cron: resultado do concurso {concurso} ainda não disponível")
                     continue

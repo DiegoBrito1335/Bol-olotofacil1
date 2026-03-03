@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 class ResultadoService:
 
-    # APIs de resultado em ordem de preferência
+    # APIs Lotofácil em ordem de preferência
     _APIS = [
         {
             "url": "https://servicebus2.caixa.gov.br/portaldeloterias/api/lotofacil/{concurso}",
@@ -26,17 +26,55 @@ class ResultadoService:
             "campo_premiacoes": "premiacoes",
         },
     ]
+    # APIs Mega-Sena em ordem de preferência
+    _APIS_MEGASENA = [
+        {
+            "url": "https://servicebus2.caixa.gov.br/portaldeloterias/api/megasena/{concurso}",
+            "campo_dezenas": "listaDezenas",
+            "campo_premiacoes": "listaRateioPremio",
+        },
+        {
+            "url": "https://loteriascaixa-api.herokuapp.com/api/megasena/{concurso}",
+            "campo_dezenas": "dezenas",
+            "campo_premiacoes": "premiacoes",
+        },
+    ]
     _HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; BolaoBot/1.0)"}
 
     @staticmethod
-    async def buscar_resultado_api(concurso_numero: int) -> Optional[List[int]]:
+    def _get_apis(tipo: str) -> list:
+        if tipo == 'megasena':
+            return ResultadoService._APIS_MEGASENA
+        return ResultadoService._APIS
+
+    @staticmethod
+    def _config_loteria(tipo: str) -> dict:
+        """Retorna configurações específicas de cada loteria."""
+        if tipo == 'megasena':
+            return {
+                'total_dezenas': 6,
+                'min_acertos_premio': 4,
+                'faixa_offset': 7,   # acertos = 7 - faixa (faixa1=Sena=6ac, faixa3=Quadra=4ac)
+                'resumo_keys': [6, 5, 4],
+            }
+        return {
+            'total_dezenas': 15,
+            'min_acertos_premio': 11,
+            'faixa_offset': 16,  # acertos = 16 - faixa (faixa1=15ac, faixa5=11ac)
+            'resumo_keys': [15, 14, 13, 12, 11],
+        }
+
+    @staticmethod
+    async def buscar_resultado_api(concurso_numero: int, tipo: str = 'lotofacil') -> Optional[List[int]]:
         """
-        Busca resultado da Lotofácil via API pública.
-        Tenta a API oficial da Caixa primeiro, com fallback para a API Heroku.
-        Retorna lista ordenada de 15 inteiros, ou None se ambas falharem.
+        Busca resultado da loteria via API pública.
+        Suporta 'lotofacil' e 'megasena'.
+        Retorna lista ordenada de inteiros, ou None se ambas as APIs falharem.
         """
+        config = ResultadoService._config_loteria(tipo)
+        total_dezenas = config['total_dezenas']
         async with httpx.AsyncClient() as client:
-            for api in ResultadoService._APIS:
+            for api in ResultadoService._get_apis(tipo):
                 url = api["url"].format(concurso=concurso_numero)
                 campo = api["campo_dezenas"]
                 try:
@@ -44,26 +82,30 @@ class ResultadoService:
                     if response.status_code == 200:
                         data = response.json()
                         dezenas = [int(d) for d in data.get(campo, [])]
-                        if len(dezenas) == 15:
-                            logger.info(f"Resultado do concurso {concurso_numero} obtido via {url}")
+                        if len(dezenas) == total_dezenas:
+                            logger.info(f"Resultado do concurso {concurso_numero} ({tipo}) obtido via {url}")
                             return sorted(dezenas)
                         logger.warning(f"API {url} retornou {len(dezenas)} dezenas para concurso {concurso_numero}")
                     else:
                         logger.warning(f"API {url} retornou status {response.status_code}")
                 except Exception as e:
                     logger.warning(f"Falha na API {url}: {e}")
-        logger.error(f"Todas as APIs falharam para concurso {concurso_numero}")
+        logger.error(f"Todas as APIs falharam para concurso {concurso_numero} ({tipo})")
         return None
 
     @staticmethod
-    async def buscar_resultado_completo(concurso_numero: int) -> Optional[Dict[str, Any]]:
+    async def buscar_resultado_completo(concurso_numero: int, tipo: str = 'lotofacil') -> Optional[Dict[str, Any]]:
         """
-        Busca resultado completo da Lotofácil via API pública.
-        Tenta a API oficial da Caixa primeiro, com fallback para a API Heroku.
-        Retorna {dezenas: [...], premiacoes: {11: valor, 12: valor, ...}} ou None.
+        Busca resultado completo via API pública (dezenas + premiações).
+        Suporta 'lotofacil' e 'megasena'.
+        Retorna {dezenas: [...], premiacoes: {N_acertos: valor, ...}} ou None.
         """
+        config = ResultadoService._config_loteria(tipo)
+        total_dezenas = config['total_dezenas']
+        faixa_offset = config['faixa_offset']
+        min_acertos = config['min_acertos_premio']
         async with httpx.AsyncClient() as client:
-            for api in ResultadoService._APIS:
+            for api in ResultadoService._get_apis(tipo):
                 url = api["url"].format(concurso=concurso_numero)
                 campo_dezenas = api["campo_dezenas"]
                 campo_premiacoes = api["campo_premiacoes"]
@@ -75,7 +117,7 @@ class ResultadoService:
 
                     data = response.json()
                     dezenas = [int(d) for d in data.get(campo_dezenas, [])]
-                    if len(dezenas) != 15:
+                    if len(dezenas) != total_dezenas:
                         logger.warning(f"API {url} retornou {len(dezenas)} dezenas para concurso {concurso_numero}")
                         continue
 
@@ -85,12 +127,11 @@ class ResultadoService:
                     for p in premiacoes_raw:
                         faixa = p.get("faixa", 0)
                         valor = p.get("valorPremio", 0)
-                        # faixa 1 = 15 acertos, faixa 2 = 14 acertos, etc.
-                        acertos = 16 - faixa
-                        if 11 <= acertos <= 15:
+                        acertos = faixa_offset - faixa
+                        if min_acertos <= acertos <= total_dezenas:
                             premiacoes[acertos] = float(valor) if valor else 0.0
 
-                    logger.info(f"Resultado completo do concurso {concurso_numero} obtido via {url}")
+                    logger.info(f"Resultado completo do concurso {concurso_numero} ({tipo}) obtido via {url}")
                     return {
                         "dezenas": sorted(dezenas),
                         "premiacoes": premiacoes,
@@ -98,7 +139,7 @@ class ResultadoService:
                 except Exception as e:
                     logger.warning(f"Falha na API {url}: {e}")
 
-        logger.error(f"Todas as APIs falharam para concurso {concurso_numero}")
+        logger.error(f"Todas as APIs falharam para concurso {concurso_numero} ({tipo})")
         return None
 
     @staticmethod
@@ -116,21 +157,24 @@ class ResultadoService:
         concurso_numero: int,
         premiacoes: Dict[int, float],
         jogos_resultado: List[Dict[str, Any]],
+        tipo: str = 'lotofacil',
     ) -> float:
         """
         Calcula e distribui prêmios para os participantes do bolão.
 
-        1. Para cada jogo com >=11 acertos, soma o premio da faixa
+        1. Para cada jogo com acertos >= min_acertos_premio, soma o premio da faixa
         2. Divide o total proporcionalmente pelas cotas vendidas
         3. Credita na carteira de cada participante
 
         Retorna o premio_total distribuído.
         """
+        config = ResultadoService._config_loteria(tipo)
+        min_acertos = config['min_acertos_premio']
         # Calcular prêmio total do bolão neste concurso
         premio_total = 0.0
         for jogo in jogos_resultado:
             acertos = jogo["acertos"]
-            if acertos >= 11 and acertos in premiacoes:
+            if acertos >= min_acertos and acertos in premiacoes:
                 premio_total += premiacoes[acertos]
 
         if premio_total <= 0:
@@ -253,9 +297,19 @@ class ResultadoService:
                 "resumo": {},
             }
 
+        # Buscar concurso_numero e tipo do bolão
+        bolao_result = supabase.table("boloes")\
+            .select("concurso_numero, tipo")\
+            .eq("id", bolao_id)\
+            .execute()
+        concurso = bolao_result.data[0]["concurso_numero"] if bolao_result.data else 0
+        tipo = (bolao_result.data[0].get("tipo") or 'lotofacil') if bolao_result.data else 'lotofacil'
+        config = ResultadoService._config_loteria(tipo)
+        min_acertos = config['min_acertos_premio']
+
         # Calcular acertos e atualizar cada jogo
         jogos_resultado = []
-        resumo = {15: 0, 14: 0, 13: 0, 12: 0, 11: 0}
+        resumo: Dict[int, int] = {k: 0 for k in config['resumo_keys']}
 
         for jogo in jogos:
             acertos = ResultadoService.calcular_acertos(
@@ -274,7 +328,7 @@ class ResultadoService:
                 "acertos": acertos,
             })
 
-            if acertos >= 11:
+            if acertos >= min_acertos:
                 resumo[acertos] = resumo.get(acertos, 0) + 1
 
         # Atualizar bolão com status apurado
@@ -282,13 +336,6 @@ class ResultadoService:
             .update({"status": "apurado"})\
             .eq("id", bolao_id)\
             .execute()
-
-        # Buscar concurso_numero
-        bolao_result = supabase.table("boloes")\
-            .select("concurso_numero")\
-            .eq("id", bolao_id)\
-            .execute()
-        concurso = bolao_result.data[0]["concurso_numero"] if bolao_result.data else 0
 
         # Inserir em resultados_concurso (consistência com apurar_concurso)
         supabase.table("resultados_concurso").insert({
@@ -308,10 +355,10 @@ class ResultadoService:
 
         # Buscar premiação e distribuir
         premio_total = 0.0
-        resultado_completo = await ResultadoService.buscar_resultado_completo(concurso)
+        resultado_completo = await ResultadoService.buscar_resultado_completo(concurso, tipo)
         if resultado_completo and resultado_completo.get("premiacoes"):
             premio_total = await ResultadoService.calcular_e_distribuir_premio(
-                bolao_id, concurso, resultado_completo["premiacoes"], jogos_resultado
+                bolao_id, concurso, resultado_completo["premiacoes"], jogos_resultado, tipo
             )
 
         return {
@@ -328,7 +375,7 @@ class ResultadoService:
     # ===================================
 
     @staticmethod
-    async def apurar_concurso(bolao_id: str, concurso_numero: int, resultado_dezenas: List[int], premiacoes: Optional[Dict[int, float]] = None) -> Dict[str, Any]:
+    async def apurar_concurso(bolao_id: str, concurso_numero: int, resultado_dezenas: List[int], premiacoes: Optional[Dict[int, float]] = None, tipo: str = 'lotofacil') -> Dict[str, Any]:
         """
         Apura um concurso específico de um bolão teimosinha:
         1. Busca todos os jogos do bolão
@@ -368,8 +415,10 @@ class ResultadoService:
             }
 
         # Calcular e salvar acertos por jogo
+        config = ResultadoService._config_loteria(tipo)
+        min_acertos = config['min_acertos_premio']
         jogos_resultado = []
-        resumo = {15: 0, 14: 0, 13: 0, 12: 0, 11: 0}
+        resumo: Dict[int, int] = {k: 0 for k in config['resumo_keys']}
 
         for jogo in jogos:
             acertos = ResultadoService.calcular_acertos(
@@ -390,7 +439,7 @@ class ResultadoService:
                 "acertos": acertos,
             })
 
-            if acertos >= 11:
+            if acertos >= min_acertos:
                 resumo[acertos] = resumo.get(acertos, 0) + 1
 
         # Incrementar concursos_apurados (com null safety)
@@ -406,13 +455,13 @@ class ResultadoService:
         premio_total = 0.0
         if premiacoes is None:
             # Buscar premiação da API
-            resultado_completo = await ResultadoService.buscar_resultado_completo(concurso_numero)
+            resultado_completo = await ResultadoService.buscar_resultado_completo(concurso_numero, tipo)
             if resultado_completo:
                 premiacoes = resultado_completo.get("premiacoes", {})
 
         if premiacoes:
             premio_total = await ResultadoService.calcular_e_distribuir_premio(
-                bolao_id, concurso_numero, premiacoes, jogos_resultado
+                bolao_id, concurso_numero, premiacoes, jogos_resultado, tipo
             )
 
         return {
@@ -435,6 +484,7 @@ class ResultadoService:
             return {"error": "Bolão não encontrado"}
 
         bolao = bolao_result.data[0]
+        tipo = bolao.get("tipo") or 'lotofacil'
         concursos = BolaoService.concursos_list(bolao)
 
         # Verificar quais concursos já foram apurados
@@ -462,7 +512,7 @@ class ResultadoService:
 
         for concurso in concursos_pendentes:
             # Buscar resultado completo da API (com premiações)
-            resultado_completo = await ResultadoService.buscar_resultado_completo(concurso)
+            resultado_completo = await ResultadoService.buscar_resultado_completo(concurso, tipo)
             if not resultado_completo:
                 erros.append(f"Concurso {concurso}: resultado não disponível")
                 continue
@@ -471,7 +521,8 @@ class ResultadoService:
             resultado = await ResultadoService.apurar_concurso(
                 bolao_id, concurso,
                 resultado_completo["dezenas"],
-                resultado_completo.get("premiacoes", {})
+                resultado_completo.get("premiacoes", {}),
+                tipo,
             )
             resultados.append(resultado)
             premio_total_geral += resultado.get("premio_total", 0)

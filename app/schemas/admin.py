@@ -3,7 +3,7 @@ Schemas para rotas administrativas
 """
 
 from pydantic import BaseModel, Field, field_validator
-from typing import Optional, List
+from typing import Optional, List, Literal
 from datetime import datetime
 from decimal import Decimal
 
@@ -22,6 +22,7 @@ class BolaoCreateAdmin(BaseModel):
     valor_cota: Decimal = Field(..., gt=0)
     status: str = Field(default="aberto", pattern="^(aberto|fechado|apurado|cancelado)$")
     data_fechamento: Optional[datetime] = None
+    tipo: Literal['lotofacil', 'megasena'] = 'lotofacil'
 
     @field_validator('concurso_fim')
     @classmethod
@@ -53,15 +54,12 @@ class BolaoUpdateAdmin(BaseModel):
 
 class JogoCreateAdmin(BaseModel):
     """Schema para adicionar um jogo a um bolão"""
-    dezenas: List[int] = Field(..., min_length=15, max_length=18)
+    dezenas: List[int] = Field(..., min_length=6, max_length=20)
 
     @field_validator('dezenas')
     @classmethod
     def validate_dezenas(cls, v):
-        if not (15 <= len(v) <= 18):
-            raise ValueError('Lotofácil requer entre 15 e 18 números')
-        if any(d < 1 or d > 25 for d in v):
-            raise ValueError('Números devem estar entre 1 e 25')
+        # Validação de range/count feita no route baseado no tipo do bolão
         if len(set(v)) != len(v):
             raise ValueError('Números devem ser únicos')
         return sorted(v)
@@ -78,16 +76,13 @@ class JogosCreateBatchAdmin(BaseModel):
 
 class ResultadoInput(BaseModel):
     """Schema para input manual de resultado"""
-    dezenas: List[int] = Field(..., min_length=15, max_length=15)
+    dezenas: List[int] = Field(..., min_length=6, max_length=15)
     concurso_numero: Optional[int] = None
 
     @field_validator('dezenas')
     @classmethod
     def validate_dezenas(cls, v):
-        if len(v) != 15:
-            raise ValueError('Resultado deve ter exatamente 15 números')
-        if any(d < 1 or d > 25 for d in v):
-            raise ValueError('Números devem estar entre 1 e 25')
-        if len(set(v)) != 15:
+        # Validação de count (6 ou 15) e range (1-60 ou 1-25) feita no route baseado no tipo
+        if len(set(v)) != len(v):
             raise ValueError('Números devem ser únicos')
         return sorted(v)
