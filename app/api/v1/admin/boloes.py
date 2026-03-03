@@ -218,7 +218,10 @@ async def atualizar_bolao(
     
     if bolao_data.status is not None:
         update_dict["status"] = bolao_data.status
-    
+
+    if bolao_data.tipo is not None:
+        update_dict["tipo"] = bolao_data.tipo
+
     if not update_dict:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

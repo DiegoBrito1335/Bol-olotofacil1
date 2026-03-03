@@ -46,6 +46,7 @@ class BolaoUpdateAdmin(BaseModel):
     valor_cota: Optional[Decimal] = Field(None, gt=0)
     status: Optional[str] = Field(None, pattern="^(aberto|fechado|apurado|cancelado)$")
     data_fechamento: Optional[datetime] = None
+    tipo: Optional[Literal['lotofacil', 'megasena']] = None
 
 
 # ===================================
