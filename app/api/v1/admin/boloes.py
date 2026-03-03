@@ -465,8 +465,13 @@ async def upload_jogos_csv(bolao_id: str, file: UploadFile = File(...)):
     else:
         csv_min, csv_max, csv_max_val = 15, 18, 25
 
-    # Ler conteúdo do arquivo
+    # Ler conteúdo do arquivo (limite: 5MB)
     content = await file.read()
+    if len(content) > 5_000_000:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="Arquivo muito grande. Limite máximo: 5MB."
+        )
     try:
         text = content.decode("utf-8")
     except UnicodeDecodeError:
@@ -1047,53 +1052,3 @@ async def ver_resultado(bolao_id: str):
         "jogos_resultado": jogos_resultado,
         "resumo": resumo,
     }
-
-
-# ===================================
-# MIGRAÇÃO DO BANCO
-# ===================================
-
-@router.post("/migrate/add-columns", tags=["Admin - Migração"])
-async def migrate_add_columns():
-    """
-    Adiciona colunas necessárias para apuração.
-    Executar uma vez. Seguro para rodar múltiplas vezes (IF NOT EXISTS).
-    """
-    from app.config import settings
-    import httpx
-
-    sql = """
-    ALTER TABLE boloes ADD COLUMN IF NOT EXISTS resultado_dezenas integer[] DEFAULT NULL;
-    ALTER TABLE jogos_bolao ADD COLUMN IF NOT EXISTS acertos integer DEFAULT NULL;
-    """
-
-    # Executar via Supabase SQL endpoint (REST)
-    url = f"{settings.SUPABASE_URL}/rest/v1/rpc/exec_sql"
-    headers = {
-        "apikey": settings.SUPABASE_SERVICE_ROLE_KEY,
-        "Authorization": f"Bearer {settings.SUPABASE_SERVICE_ROLE_KEY}",
-        "Content-Type": "application/json",
-    }
-
-    # Tentar via RPC primeiro
-    try:
-        response = httpx.post(url, json={"query": sql}, headers=headers, timeout=15.0)
-        if response.status_code in (200, 201):
-            return {"mensagem": "Migração executada com sucesso via RPC"}
-    except Exception:
-        pass
-
-    # Fallback: executar via SQL direto no endpoint do Supabase
-    sql_url = f"{settings.SUPABASE_URL}/rest/v1/rpc/"
-    try:
-        # Tentar adicionar colunas individualmente usando o Supabase Management API
-        # Se RPC não funcionar, as colunas precisam ser adicionadas manualmente
-        return {
-            "mensagem": "RPC não disponível. Execute o SQL manualmente no Supabase Dashboard",
-            "sql": sql.strip(),
-        }
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Erro na migração: {str(e)}"
-        )

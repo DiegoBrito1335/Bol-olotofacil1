@@ -4,9 +4,12 @@ Rotas de transações
 
 from fastapi import APIRouter, HTTPException, status, Query, Depends
 from typing import Optional
+import logging
 
 from app.core.supabase import supabase_admin as supabase
 from app.api.deps import get_current_user_id
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/transacoes", tags=["Transações"])
 
@@ -57,10 +60,10 @@ async def listar_transacoes(
     except HTTPException:
         raise
     except Exception as e:
-        print(f"❌ Erro ao listar transações: {str(e)}")
+        logger.error(f"Erro ao listar transações para {current_user_id}: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Erro ao buscar transações: {str(e)}"
+            detail="Erro ao buscar transações"
         )
 
 
@@ -111,7 +114,8 @@ async def resumo_transacoes(
     except HTTPException:
         raise
     except Exception as e:
+        logger.error(f"Erro ao calcular resumo de transações para {current_user_id}: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Erro ao calcular resumo: {str(e)}"
+            detail="Erro ao calcular resumo"
         )

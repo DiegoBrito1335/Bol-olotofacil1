@@ -33,27 +33,29 @@ class RegistroResponse(BaseModel):
 
 
 @router.post("/register", response_model=RegistroResponse, status_code=status.HTTP_201_CREATED)
-async def registrar_usuario(request: RegistroRequest):
+@limiter.limit("5/minute")
+async def registrar_usuario(request: Request, body: RegistroRequest):
     """
     Registra um novo usuário.
     1. Cria usuário via Supabase Auth signup (envia email de confirmação)
     2. Cria perfil na tabela 'usuarios'
     3. Cria carteira com saldo zero
+    Rate limit: 5 cadastros por minuto por IP.
     """
 
-    if not request.nome or not request.nome.strip():
+    if not body.nome or not body.nome.strip():
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Nome é obrigatório"
         )
 
-    if not request.email or not request.email.strip():
+    if not body.email or not body.email.strip():
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="E-mail é obrigatório"
         )
 
-    if not request.senha or len(request.senha) < 6:
+    if not body.senha or len(body.senha) < 6:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Senha deve ter no mínimo 6 caracteres"
@@ -67,9 +69,9 @@ async def registrar_usuario(request: RegistroRequest):
         "Content-Type": "application/json",
     }
     auth_payload = {
-        "email": request.email.strip(),
-        "password": request.senha,
-        "data": {"nome": request.nome.strip()},
+        "email": body.email.strip(),
+        "password": body.senha,
+        "data": {"nome": body.nome.strip()},
     }
 
     try:
@@ -131,8 +133,8 @@ async def registrar_usuario(request: RegistroRequest):
     # 2. Criar perfil na tabela 'usuarios'
     usuario_data = {
         "id": usuario_id,
-        "nome": request.nome.strip(),
-        "telefone": request.telefone,
+        "nome": body.nome.strip(),
+        "telefone": body.telefone,
     }
 
     result = supabase.table("usuarios").insert(usuario_data).execute()
@@ -152,14 +154,14 @@ async def registrar_usuario(request: RegistroRequest):
     if cart_result.error:
         logger.warning(f"Aviso: Erro ao criar carteira para {usuario_id}: {cart_result.error}")
 
-    logger.info(f"Usuário registrado: {usuario_id} - {request.nome}")
+    logger.info(f"Usuário registrado: {usuario_id} - {body.nome}")
 
-    is_admin = request.email.strip().lower() in settings.admin_emails_list
+    is_admin = body.email.strip().lower() in settings.admin_emails_list
 
     return RegistroResponse(
         id=usuario_id,
-        nome=request.nome.strip(),
-        email=request.email.strip(),
+        nome=body.nome.strip(),
+        email=body.email.strip(),
         mensagem="Cadastro realizado! Verifique seu email para confirmar a conta.",
         is_admin=is_admin,
     )
