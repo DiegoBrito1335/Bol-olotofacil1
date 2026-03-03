@@ -55,7 +55,7 @@ class ResultadoService:
                 'total_dezenas': 6,
                 'min_acertos_premio': 4,
                 'faixa_offset': 7,   # acertos = 7 - faixa (faixa1=Sena=6ac, faixa3=Quadra=4ac)
-                'resumo_keys': [6, 5, 4],
+                'resumo_keys': [6, 5, 4, 3, 2, 1, 0],
             }
         return {
             'total_dezenas': 15,
@@ -328,8 +328,8 @@ class ResultadoService:
                 "acertos": acertos,
             })
 
-            if acertos >= min_acertos:
-                resumo[acertos] = resumo.get(acertos, 0) + 1
+            if acertos in resumo:
+                resumo[acertos] += 1
 
         # Atualizar bolão com status apurado
         supabase.table("boloes")\
@@ -344,14 +344,17 @@ class ResultadoService:
             "dezenas": resultado_dezenas,
         }).execute()
 
-        # Inserir acertos por jogo em acertos_concurso
-        for jogo_res in jogos_resultado:
-            supabase.table("acertos_concurso").insert({
-                "jogo_id": jogo_res["jogo_id"],
-                "bolao_id": bolao_id,
-                "concurso_numero": concurso,
-                "acertos": jogo_res["acertos"],
-            }).execute()
+        # Batch insert de acertos por jogo em acertos_concurso (1 request em vez de N)
+        if jogos_resultado:
+            supabase.table("acertos_concurso").insert([
+                {
+                    "jogo_id": jogo_res["jogo_id"],
+                    "bolao_id": bolao_id,
+                    "concurso_numero": concurso,
+                    "acertos": jogo_res["acertos"],
+                }
+                for jogo_res in jogos_resultado
+            ]).execute()
 
         # Buscar premiação e distribuir
         premio_total = 0.0
@@ -416,7 +419,6 @@ class ResultadoService:
 
         # Calcular e salvar acertos por jogo
         config = ResultadoService._config_loteria(tipo)
-        min_acertos = config['min_acertos_premio']
         jogos_resultado = []
         resumo: Dict[int, int] = {k: 0 for k in config['resumo_keys']}
 
@@ -425,22 +427,26 @@ class ResultadoService:
                 jogo["dezenas"], resultado_dezenas
             )
 
-            # Inserir acertos do concurso
-            supabase.table("acertos_concurso").insert({
-                "jogo_id": jogo["id"],
-                "bolao_id": bolao_id,
-                "concurso_numero": concurso_numero,
-                "acertos": acertos,
-            }).execute()
-
             jogos_resultado.append({
                 "jogo_id": jogo["id"],
                 "dezenas": jogo["dezenas"],
                 "acertos": acertos,
             })
 
-            if acertos >= min_acertos:
-                resumo[acertos] = resumo.get(acertos, 0) + 1
+            if acertos in resumo:
+                resumo[acertos] += 1
+
+        # Batch insert de acertos em acertos_concurso (1 request em vez de N)
+        if jogos_resultado:
+            supabase.table("acertos_concurso").insert([
+                {
+                    "jogo_id": jogo_res["jogo_id"],
+                    "bolao_id": bolao_id,
+                    "concurso_numero": concurso_numero,
+                    "acertos": jogo_res["acertos"],
+                }
+                for jogo_res in jogos_resultado
+            ]).execute()
 
         # Incrementar concursos_apurados (com null safety)
         bolao_result = supabase.table("boloes").select("concursos_apurados").eq("id", bolao_id).execute()

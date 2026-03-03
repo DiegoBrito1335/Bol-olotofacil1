@@ -177,8 +177,8 @@ class TableQuery:
             logger.error(f"Erro ao executar {self._operation} em {self.table_name}: {str(e)}")
             return QueryResponse(None, str(e))
     
-    def insert(self, data: Dict[str, Any]):
-        """Prepara inserção de dados na tabela (executa em .execute())"""
+    def insert(self, data):
+        """Prepara inserção de dados na tabela (executa em .execute()). Aceita dict ou list[dict] para batch insert."""
         self._operation = "insert"
         self._payload = data
         return self
