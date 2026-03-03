@@ -1,7 +1,7 @@
 from pydantic import BaseModel
 from decimal import Decimal
 from datetime import datetime
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 
 class JogoResponse(BaseModel):
@@ -32,6 +32,7 @@ class BolaoListItem(BaseModel):
     concurso_numero: int
     concurso_fim: Optional[int] = None
     concursos_apurados: Optional[int] = 0
+    tipo: Optional[Literal['lotofacil', 'megasena']] = 'lotofacil'
     status: str
     created_at: datetime
     
