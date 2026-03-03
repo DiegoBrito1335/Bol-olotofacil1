@@ -495,6 +495,11 @@ async def upload_jogos_csv(bolao_id: str, file: UploadFile = File(...)):
 
         partes = [p.strip() for p in linha.split(separador)]
 
+        # Fallback: se resultou em 1 parte com espaços, separar por whitespace
+        # (planilhas que exportam números separados por espaço em uma célula)
+        if len(partes) == 1 and ' ' in partes[0]:
+            partes = partes[0].split()
+
         # Verificar se é header (primeira linha com texto não-numérico)
         if i == 1:
             tem_texto = any(not p.replace("-", "").isdigit() for p in partes if p)
