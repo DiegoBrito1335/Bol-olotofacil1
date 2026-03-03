@@ -259,6 +259,12 @@ async def login_usuario(request: Request, body: LoginRequest):
 
     is_admin = user_email.lower() in settings.admin_emails_list
 
+    # Checar tabela admins (admins dinâmicos promovidos via painel)
+    if not is_admin:
+        admins_result = supabase.table("admins").select("usuario_id").eq("usuario_id", usuario_id).execute()
+        if admins_result.data:
+            is_admin = True
+
     # Gerar JWT assinado com SECRET_KEY
     access_token = create_access_token(
         user_id=usuario_id,

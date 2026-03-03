@@ -35,6 +35,23 @@ class SupabaseHTTPClient:
         """Chama uma função RPC (Remote Procedure Call) no Supabase"""
         return RPCQuery(self.base_url, function_name, params, self.headers, self._client)
 
+    def get_auth_users(self) -> list:
+        """Lista todos os usuários do Supabase Auth (requer service role key)."""
+        url = f"{self.base_url}/auth/v1/admin/users?per_page=1000"
+        try:
+            r = self._client.get(url)
+            r.raise_for_status()
+            return r.json().get("users", [])
+        except Exception as e:
+            logger.error(f"Erro ao listar auth users: {e}")
+            return []
+
+    def delete_auth_user(self, user_id: str) -> None:
+        """Remove usuário do Supabase Auth (cascata para tabelas vinculadas)."""
+        url = f"{self.base_url}/auth/v1/admin/users/{user_id}"
+        r = self._client.delete(url)
+        r.raise_for_status()
+
 class TableQuery:
     """
     Simula o comportamento do cliente Supabase para queries em tabelas.

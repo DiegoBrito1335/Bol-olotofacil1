@@ -25,6 +25,7 @@ from app.api import perfil
 # ====================================
 from app.api.v1.admin.boloes import router as admin_boloes_router
 from app.api.v1.admin.stats import router as admin_stats_router
+from app.api.v1.admin.usuarios import router as admin_usuarios_router
 from app.api.cron import router as cron_router
 
 
@@ -132,6 +133,12 @@ app.include_router(
     admin_stats_router,
     prefix="/api/v1/admin",
     tags=["Admin - Dashboard"]
+)
+
+app.include_router(
+    admin_usuarios_router,
+    prefix="/api/v1/admin/usuarios",
+    tags=["Admin - Usuários"]
 )
 
 app.include_router(
