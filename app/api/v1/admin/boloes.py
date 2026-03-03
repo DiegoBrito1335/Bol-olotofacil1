@@ -496,7 +496,11 @@ async def upload_jogos_csv(bolao_id: str, file: UploadFile = File(...)):
         if not linha:
             continue
 
-        partes = [p.strip() for p in linha.split(separador)]
+        # Remove aspas externas que Excel adiciona ao exportar CSV
+        # ex: """01;04;09;25;27;29""" → 01;04;09;25;27;29
+        linha = linha.strip('"')
+
+        partes = [p.strip().strip('"') for p in linha.split(separador)]
 
         # Fallback: se resultou em 1 parte com espaços, separar por whitespace
         # (planilhas que exportam números separados por espaço em uma célula)
