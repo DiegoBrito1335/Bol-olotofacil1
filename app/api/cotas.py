@@ -299,11 +299,11 @@ async def meus_resultados(
             vc = float(bolao.get("valor_cota", 0))
             user_qtd = max(1, round(float(cota["valor_pago"]) / vc)) if vc > 0 else 1
 
-            # Calcular prêmio do usuário (proporcional)
+            # Calcular prêmio do usuário (proporcional a total_cotas, não só vendidas)
             total_premio = premio_total_por_bolao.get(bid, 0)
-            vendidas = bolao["total_cotas"] - bolao["cotas_disponiveis"]
-            if vendidas > 0 and total_premio > 0:
-                premio_usuario = round(total_premio * user_qtd / vendidas, 2)
+            total_cotas = int(bolao["total_cotas"]) if bolao.get("total_cotas") else 0
+            if total_cotas > 0 and total_premio > 0:
+                premio_usuario = round(total_premio * user_qtd / total_cotas, 2)
             else:
                 premio_usuario = 0
 

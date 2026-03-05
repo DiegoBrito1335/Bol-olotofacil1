@@ -1054,3 +1054,101 @@ async def ver_resultado(bolao_id: str):
         "jogos_resultado": jogos_resultado,
         "resumo": resumo,
     }
+
+
+@router.post("/boloes/{bolao_id}/redistribuir-premio/{concurso_numero}")
+async def redistribuir_premio(
+    bolao_id: str,
+    concurso_numero: int,
+    admin_id: str = Depends(get_admin_user),
+):
+    """
+    Re-credita o prêmio de um concurso já apurado nas carteiras dos participantes.
+    Usar quando o crédito automático falhou (ex: apurado com código antigo sem admin key).
+    ATENÇÃO: sem idempotência — chamar apenas UMA VEZ por bolão/concurso.
+    """
+    # 1. Verificar premiacoes_bolao
+    prem = supabase.table("premiacoes_bolao")\
+        .select("premio_total")\
+        .eq("bolao_id", bolao_id)\
+        .eq("concurso_numero", concurso_numero)\
+        .execute()
+    if not prem.data:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Premiação não encontrada para este bolão/concurso")
+    premio_total = float(prem.data[0]["premio_total"])
+    if premio_total <= 0:
+        return {"detail": "Prêmio zero, nada a redistribuir"}
+
+    # 2. Buscar dados do bolão
+    bolao_r = supabase.table("boloes")\
+        .select("nome, valor_cota, total_cotas, criador_id")\
+        .eq("id", bolao_id)\
+        .execute()
+    if not bolao_r.data:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Bolão não encontrado")
+    b = bolao_r.data[0]
+    valor_cota = float(b["valor_cota"])
+    total_cotas = int(b["total_cotas"])
+    criador_id = b.get("criador_id")
+    bolao_nome = b["nome"]
+
+    # 3. Buscar e agrupar cotas vendidas por usuário
+    cotas_r = supabase.table("cotas")\
+        .select("usuario_id, valor_pago")\
+        .eq("bolao_id", bolao_id)\
+        .execute()
+    cotas_por_usuario: dict = {}
+    for c in (cotas_r.data or []):
+        uid = c["usuario_id"]
+        qtd = max(1, round(float(c["valor_pago"]) / valor_cota)) if valor_cota > 0 else 1
+        cotas_por_usuario[uid] = cotas_por_usuario.get(uid, 0) + qtd
+    total_vendidas = sum(cotas_por_usuario.values())
+    if total_cotas == 0:
+        total_cotas = total_vendidas
+
+    creditados: list = []
+    erros: list = []
+
+    # 4. Creditar compradores proporcionalmente
+    for uid, qtd in cotas_por_usuario.items():
+        valor = round((qtd / total_cotas) * premio_total, 2)
+        if valor <= 0:
+            continue
+        desc = f"Prêmio {bolao_nome} - Concurso {concurso_numero} ({qtd} cota{'s' if qtd > 1 else ''})"
+        r = supabase.rpc("creditar_carteira", {
+            "p_usuario_id": uid,
+            "p_valor": valor,
+            "p_origem": "premio_bolao",
+            "p_referencia_id": bolao_id,
+            "p_descricao": desc,
+        }).execute()
+        if r.error:
+            erros.append({"usuario_id": uid, "valor": valor, "erro": str(r.error)})
+        else:
+            creditados.append({"usuario_id": uid, "valor": valor})
+
+    # 5. Creditar criador pelas cotas não vendidas
+    nao_vendidas = total_cotas - total_vendidas
+    if nao_vendidas > 0 and criador_id:
+        valor_criador = round((nao_vendidas / total_cotas) * premio_total, 2)
+        if valor_criador > 0:
+            desc_c = f"Prêmio (criador) {bolao_nome} - Concurso {concurso_numero} ({nao_vendidas} cotas não vendidas)"
+            r = supabase.rpc("creditar_carteira", {
+                "p_usuario_id": criador_id,
+                "p_valor": valor_criador,
+                "p_origem": "premio_bolao",
+                "p_referencia_id": bolao_id,
+                "p_descricao": desc_c,
+            }).execute()
+            if r.error:
+                erros.append({"usuario_id": criador_id, "valor": valor_criador, "tipo": "criador", "erro": str(r.error)})
+            else:
+                creditados.append({"usuario_id": criador_id, "valor": valor_criador, "tipo": "criador"})
+
+    return {
+        "premio_total": premio_total,
+        "total_cotas": total_cotas,
+        "total_vendidas": total_vendidas,
+        "creditados": creditados,
+        "erros": erros,
+    }
