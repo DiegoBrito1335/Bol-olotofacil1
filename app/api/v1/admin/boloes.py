@@ -1118,7 +1118,7 @@ async def redistribuir_premio(
         r = supabase.rpc("creditar_carteira", {
             "p_usuario_id": uid,
             "p_valor": valor,
-            "p_origem": "premio_bolao",
+            "p_origem": "premiacao",
             "p_referencia_id": bolao_id,
             "p_descricao": desc,
         }).execute()
@@ -1136,7 +1136,7 @@ async def redistribuir_premio(
             r = supabase.rpc("creditar_carteira", {
                 "p_usuario_id": criador_id,
                 "p_valor": valor_criador,
-                "p_origem": "premio_bolao",
+                "p_origem": "premiacao",
                 "p_referencia_id": bolao_id,
                 "p_descricao": desc_c,
             }).execute()

@@ -238,7 +238,7 @@ class ResultadoService:
             rpc_result = supabase.rpc("creditar_carteira", {
                 "p_usuario_id": usuario_id,
                 "p_valor": premio_usuario,
-                "p_origem": "premio_bolao",
+                "p_origem": "premiacao",
                 "p_referencia_id": bolao_id,
                 "p_descricao": descricao,
             }).execute()
@@ -258,7 +258,7 @@ class ResultadoService:
                 rpc_result = supabase.rpc("creditar_carteira", {
                     "p_usuario_id": criador_id,
                     "p_valor": premio_criador,
-                    "p_origem": "premio_bolao",
+                    "p_origem": "premiacao",
                     "p_referencia_id": bolao_id,
                     "p_descricao": descricao_criador,
                 }).execute()

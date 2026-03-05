@@ -97,7 +97,7 @@ async def resumo_transacoes(
             origem = t.get("origem", "")
             if origem == "pix":
                 total_depositos += valor
-            elif origem == "premio_bolao":
+            elif origem == "premiacao":
                 total_premios += valor
             elif origem == "compra_cota":
                 total_compras += valor
