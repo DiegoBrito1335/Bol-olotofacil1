@@ -90,12 +90,13 @@ async def listar_todos_boloes(
 
 @router.post("", response_model=BolaoResponse, status_code=status.HTTP_201_CREATED)
 async def criar_bolao(
-    bolao_data: BolaoCreateAdmin
+    bolao_data: BolaoCreateAdmin,
+    admin_id: str = Depends(get_admin_user),
 ):
     """
     Cria um novo bolão (admin).
     """
-    
+
     # Preparar dados
     bolao_dict = {
         "nome": bolao_data.nome,
@@ -108,7 +109,8 @@ async def criar_bolao(
         "valor_cota": float(bolao_data.valor_cota),
         "status": bolao_data.status,
         "tipo": bolao_data.tipo,
-        "data_fechamento": bolao_data.data_fechamento.isoformat() if bolao_data.data_fechamento else None
+        "data_fechamento": bolao_data.data_fechamento.isoformat() if bolao_data.data_fechamento else None,
+        "criador_id": admin_id,
     }
     
     # Inserir no banco

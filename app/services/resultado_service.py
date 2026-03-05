@@ -187,10 +187,12 @@ class ResultadoService:
             }).execute()
             return 0.0
 
-        # Buscar dados do bolão (nome e valor_cota para calcular quantidade real)
-        bolao_result = supabase.table("boloes").select("nome, valor_cota").eq("id", bolao_id).execute()
+        # Buscar dados do bolão (nome, valor_cota, total_cotas e criador_id)
+        bolao_result = supabase.table("boloes").select("nome, valor_cota, total_cotas, criador_id").eq("id", bolao_id).execute()
         bolao_nome = bolao_result.data[0]["nome"] if bolao_result.data else "Bolão"
         valor_cota = float(bolao_result.data[0]["valor_cota"]) if bolao_result.data else 0
+        total_cotas_bolao = int(bolao_result.data[0]["total_cotas"]) if bolao_result.data else 0
+        criador_id = bolao_result.data[0].get("criador_id") if bolao_result.data else None
 
         # Buscar cotas vendidas com valor_pago
         cotas_result = supabase.table("cotas")\
@@ -199,15 +201,6 @@ class ResultadoService:
             .execute()
 
         cotas = cotas_result.data or []
-        if not cotas:
-            logger.warning(f"Bolão {bolao_id} sem cotas vendidas para distribuir prêmio")
-            supabase.table("premiacoes_bolao").insert({
-                "bolao_id": bolao_id,
-                "concurso_numero": concurso_numero,
-                "premio_total": round(premio_total, 2),
-                "distribuido": False,
-            }).execute()
-            return premio_total
 
         # Contar cotas REAIS por usuário (valor_pago / valor_cota)
         cotas_por_usuario: Dict[str, int] = {}
@@ -219,9 +212,22 @@ class ResultadoService:
                 qtd = 1
             cotas_por_usuario[uid] = cotas_por_usuario.get(uid, 0) + qtd
 
-        total_cotas = sum(cotas_por_usuario.values())
+        total_cotas_vendidas = sum(cotas_por_usuario.values())
 
-        # Distribuir para cada usuário
+        # Usar total_cotas do bolão como denominador (cotas não vendidas pertencem ao criador)
+        total_cotas = total_cotas_bolao if total_cotas_bolao > 0 else total_cotas_vendidas
+
+        if total_cotas == 0:
+            logger.warning(f"Bolão {bolao_id} sem cotas para distribuir prêmio")
+            supabase.table("premiacoes_bolao").insert({
+                "bolao_id": bolao_id,
+                "concurso_numero": concurso_numero,
+                "premio_total": round(premio_total, 2),
+                "distribuido": False,
+            }).execute()
+            return premio_total
+
+        # Distribuir para cada comprador de cotas
         for usuario_id, qtd_cotas in cotas_por_usuario.items():
             premio_usuario = round((qtd_cotas / total_cotas) * premio_total, 2)
             if premio_usuario <= 0:
@@ -242,6 +248,24 @@ class ResultadoService:
                 continue
 
             logger.info(f"Prêmio R$ {premio_usuario} creditado para usuário {usuario_id} (concurso {concurso_numero})")
+
+        # Creditar criador do bolão pelas cotas não vendidas
+        cotas_nao_vendidas = total_cotas - total_cotas_vendidas
+        if cotas_nao_vendidas > 0 and criador_id:
+            premio_criador = round((cotas_nao_vendidas / total_cotas) * premio_total, 2)
+            if premio_criador > 0:
+                descricao_criador = f"Prêmio (criador) {bolao_nome} - Concurso {concurso_numero} ({cotas_nao_vendidas} cotas não vendidas)"
+                rpc_result = supabase.rpc("creditar_carteira", {
+                    "p_usuario_id": criador_id,
+                    "p_valor": premio_criador,
+                    "p_origem": "premio_bolao",
+                    "p_referencia_id": bolao_id,
+                    "p_descricao": descricao_criador,
+                }).execute()
+                if rpc_result.error:
+                    logger.error(f"Erro ao creditar criador {criador_id} pelas cotas não vendidas: {rpc_result.error}")
+                else:
+                    logger.info(f"Prêmio R$ {premio_criador} creditado ao criador {criador_id} ({cotas_nao_vendidas} cotas não vendidas)")
 
         # Registrar premiação
         supabase.table("premiacoes_bolao").insert({
