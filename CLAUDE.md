@@ -157,8 +157,8 @@ Both update each game's `acertos` (hit count) and set the pool status to `apurad
 
 | Table | Key columns |
 |-------|-------------|
-| `boloes` | id, nome, concurso_numero, concurso_fim, total_cotas, cotas_disponiveis, valor_cota, status |
-| `jogos_bolao` | id, bolao_id, dezenas (int[]), acertos |
+| `boloes` | id, nome, concurso_numero, concurso_fim, total_cotas, cotas_disponiveis, valor_cota, status, criador_id (UUID) |
+| `jogos_bolao` | id, bolao_id, dezenas (int[]), acertos (int) |
 | `resultados_concurso` | id, bolao_id, concurso_numero, dezenas_sorteadas (int[]) |
 | `acertos_concurso` | id, jogo_id, concurso_numero, acertos |
 | `premiacoes_bolao` | id, bolao_id, concurso_numero, acertos, valor_premio |
