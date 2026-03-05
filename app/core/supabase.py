@@ -222,7 +222,10 @@ class RPCQuery:
         """Executa a função RPC"""
         try:
             response = self._client.post(self.url, json=self.params, headers=self.headers)
-            response.raise_for_status()
+            if not response.is_success:
+                error_body = response.text
+                logger.error(f"RPC {self.function_name} retornou {response.status_code}: {error_body}")
+                return QueryResponse(None, f"HTTP {response.status_code}: {error_body}")
             return QueryResponse(response.json(), None)
         except Exception as e:
             logger.error(f"Erro ao executar RPC {self.function_name}: {str(e)}")
