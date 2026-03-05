@@ -1056,7 +1056,7 @@ async def ver_resultado(bolao_id: str):
     }
 
 
-@router.post("/boloes/{bolao_id}/redistribuir-premio/{concurso_numero}")
+@router.post("/{bolao_id}/redistribuir-premio/{concurso_numero}")
 async def redistribuir_premio(
     bolao_id: str,
     concurso_numero: int,
