@@ -1107,6 +1107,7 @@ async def redistribuir_premio(
         total_cotas = total_vendidas
 
     creditados: list = []
+    ja_creditados: list = []
     erros: list = []
 
     # 4. Creditar compradores proporcionalmente
@@ -1115,6 +1116,17 @@ async def redistribuir_premio(
         if valor <= 0:
             continue
         desc = f"Prêmio {bolao_nome} - Concurso {concurso_numero} ({qtd} cota{'s' if qtd > 1 else ''})"
+        # Idempotência: verificar se já foi creditado para este concurso
+        existing = supabase.table("transacoes")\
+            .select("id")\
+            .eq("usuario_id", uid)\
+            .eq("origem", "premiacao")\
+            .like_("descricao", f"%Concurso {concurso_numero}%")\
+            .limit(1)\
+            .execute()
+        if existing.data:
+            ja_creditados.append({"usuario_id": uid, "valor": valor})
+            continue
         r = supabase.rpc("creditar_carteira", {
             "p_usuario_id": uid,
             "p_valor": valor,
@@ -1133,22 +1145,33 @@ async def redistribuir_premio(
         valor_criador = round((nao_vendidas / total_cotas) * premio_total, 2)
         if valor_criador > 0:
             desc_c = f"Prêmio (criador) {bolao_nome} - Concurso {concurso_numero} ({nao_vendidas} cotas não vendidas)"
-            r = supabase.rpc("creditar_carteira", {
-                "p_usuario_id": criador_id,
-                "p_valor": valor_criador,
-                "p_origem": "premiacao",
-                "p_referencia_id": bolao_id,
-                "p_descricao": desc_c,
-            }).execute()
-            if r.error:
-                erros.append({"usuario_id": criador_id, "valor": valor_criador, "tipo": "criador", "erro": str(r.error)})
+            existing_c = supabase.table("transacoes")\
+                .select("id")\
+                .eq("usuario_id", criador_id)\
+                .eq("origem", "premiacao")\
+                .like_("descricao", f"%Concurso {concurso_numero}%")\
+                .limit(1)\
+                .execute()
+            if existing_c.data:
+                ja_creditados.append({"usuario_id": criador_id, "valor": valor_criador, "tipo": "criador"})
             else:
-                creditados.append({"usuario_id": criador_id, "valor": valor_criador, "tipo": "criador"})
+                r = supabase.rpc("creditar_carteira", {
+                    "p_usuario_id": criador_id,
+                    "p_valor": valor_criador,
+                    "p_origem": "premiacao",
+                    "p_referencia_id": bolao_id,
+                    "p_descricao": desc_c,
+                }).execute()
+                if r.error:
+                    erros.append({"usuario_id": criador_id, "valor": valor_criador, "tipo": "criador", "erro": str(r.error)})
+                else:
+                    creditados.append({"usuario_id": criador_id, "valor": valor_criador, "tipo": "criador"})
 
     return {
         "premio_total": premio_total,
         "total_cotas": total_cotas,
         "total_vendidas": total_vendidas,
         "creditados": creditados,
+        "ja_creditados": ja_creditados,
         "erros": erros,
     }

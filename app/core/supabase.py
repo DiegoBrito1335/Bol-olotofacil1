@@ -103,6 +103,11 @@ class TableQuery:
         self._filters.append(f"{column}=neq.{value}")
         return self
 
+    def like_(self, column: str, pattern: str):
+        """Adiciona filtro LIKE (ex: '%texto%')"""
+        self._filters.append(f"{column}=like.{pattern}")
+        return self
+
     def is_(self, column: str, value: str):
         """Adiciona filtro IS (ex: is.null)"""
         self._filters.append(f"{column}=is.{value}")
