@@ -730,7 +730,8 @@ async def apurar_bolao_automatico(bolao_id: str):
 
     # Concurso único: apuração normal
     concurso = bolao["concurso_numero"]
-    resultado_dezenas = await ResultadoService.buscar_resultado_api(concurso)
+    tipo = bolao.get("tipo") or "lotofacil"
+    resultado_dezenas = await ResultadoService.buscar_resultado_api(concurso, tipo)
 
     if not resultado_dezenas:
         raise HTTPException(
