@@ -211,7 +211,7 @@ async def meus_resultados(
 
         # 2. Buscar dados dos bolões (sem resultado_dezenas — coluna não existe)
         boloes_result = supabase.table("boloes")\
-            .select("id, nome, concurso_numero, concurso_fim, status, total_cotas, cotas_disponiveis, valor_cota")\
+            .select("id, nome, concurso_numero, concurso_fim, status, total_cotas, cotas_disponiveis, valor_cota, tipo")\
             .in_("id", all_bolao_ids)\
             .execute()
         boloes_map = {b["id"]: b for b in (boloes_result.data or [])}
@@ -294,6 +294,8 @@ async def meus_resultados(
 
             bolao = boloes_map[bid]
             is_teimosinha = BolaoService.is_teimosinha(bolao)
+            tipo_bolao = bolao.get("tipo") or "lotofacil"
+            resumo_keys = list(range(7)) if tipo_bolao == "megasena" else [15, 14, 13, 12, 11]
 
             # Calcular quantidade de cotas do usuário
             vc = float(bolao.get("valor_cota", 0))
@@ -318,7 +320,7 @@ async def meus_resultados(
                     acertos_cn = acertos_map.get(bid, {}).get(cn, {})
 
                     jogos_com_acertos = []
-                    resumo_acertos = {15: 0, 14: 0, 13: 0, 12: 0, 11: 0}
+                    resumo_acertos = {k: 0 for k in resumo_keys}
                     for j in jogos_bolao:
                         ac = acertos_cn.get(j["id"], 0)
                         jogos_com_acertos.append({
@@ -348,7 +350,7 @@ async def meus_resultados(
                     acertos_cn = acertos_map.get(bid, {}).get(cn, {})
 
                     jogos_com_acertos = []
-                    resumo_acertos = {15: 0, 14: 0, 13: 0, 12: 0, 11: 0}
+                    resumo_acertos = {k: 0 for k in resumo_keys}
                     for j in jogos_bolao:
                         # Preferir acertos já calculados, senão calcular na hora
                         if acertos_cn and j["id"] in acertos_cn:
@@ -377,6 +379,7 @@ async def meus_resultados(
                     "concurso_numero": bolao["concurso_numero"],
                     "concurso_fim": bolao.get("concurso_fim"),
                     "status": bolao["status"],
+                    "tipo": tipo_bolao,
                     "resultados": resultados_list,
                     "premio_usuario": premio_usuario,
                     "quantidade_cotas": user_qtd,
