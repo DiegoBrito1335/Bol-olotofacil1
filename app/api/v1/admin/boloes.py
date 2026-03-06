@@ -674,7 +674,7 @@ async def apurar_bolao_manual(bolao_id: str, resultado: ResultadoInput):
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Concurso {resultado.concurso_numero} não pertence a este bolão (range: {concursos[0]}-{concursos[-1]})"
             )
-        resultado_apuracao = await ResultadoService.apurar_concurso(bolao_id, resultado.concurso_numero, resultado.dezenas)
+        resultado_apuracao = await ResultadoService.apurar_concurso(bolao_id, resultado.concurso_numero, resultado.dezenas, tipo=tipo)
 
         # Verificar se todos foram apurados
         total = BolaoService.total_concursos(bolao)
@@ -803,7 +803,8 @@ async def apurar_concurso_individual(bolao_id: str, concurso_numero: int):
         )
 
     # Buscar resultado completo (dezenas + premiações)
-    resultado_completo = await ResultadoService.buscar_resultado_completo(concurso_numero)
+    tipo = bolao.get("tipo") or "lotofacil"
+    resultado_completo = await ResultadoService.buscar_resultado_completo(concurso_numero, tipo)
     if not resultado_completo:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -814,7 +815,8 @@ async def apurar_concurso_individual(bolao_id: str, concurso_numero: int):
     resultado = await ResultadoService.apurar_concurso(
         bolao_id, concurso_numero,
         resultado_completo["dezenas"],
-        resultado_completo.get("premiacoes", {})
+        resultado_completo.get("premiacoes", {}),
+        tipo,
     )
 
     # Verificar se todos foram apurados

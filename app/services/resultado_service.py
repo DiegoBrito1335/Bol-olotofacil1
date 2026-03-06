@@ -19,11 +19,13 @@ class ResultadoService:
             "url": "https://servicebus2.caixa.gov.br/portaldeloterias/api/lotofacil/{concurso}",
             "campo_dezenas": "listaDezenas",
             "campo_premiacoes": "listaRateioPremio",
+            "campo_valor": "valorPremio",
         },
         {
             "url": "https://loteriascaixa-api.herokuapp.com/api/lotofacil/{concurso}",
             "campo_dezenas": "dezenas",
             "campo_premiacoes": "premiacoes",
+            "campo_valor": "premio",
         },
     ]
     # APIs Mega-Sena em ordem de preferência
@@ -32,11 +34,13 @@ class ResultadoService:
             "url": "https://servicebus2.caixa.gov.br/portaldeloterias/api/megasena/{concurso}",
             "campo_dezenas": "listaDezenas",
             "campo_premiacoes": "listaRateioPremio",
+            "campo_valor": "valorPremio",
         },
         {
             "url": "https://loteriascaixa-api.herokuapp.com/api/megasena/{concurso}",
             "campo_dezenas": "dezenas",
             "campo_premiacoes": "premiacoes",
+            "campo_valor": "premio",
         },
     ]
     _HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; BolaoBot/1.0)"}
@@ -122,14 +126,18 @@ class ResultadoService:
                         continue
 
                     # Extrair premiações por faixa de acertos
+                    campo_valor = api.get("campo_valor", "valorPremio")
                     premiacoes_raw = data.get(campo_premiacoes, [])
                     premiacoes = {}
                     for p in premiacoes_raw:
                         faixa = p.get("faixa", 0)
-                        valor = p.get("valorPremio", 0)
+                        valor = p.get(campo_valor, 0)
                         acertos = faixa_offset - faixa
                         if min_acertos <= acertos <= total_dezenas:
-                            premiacoes[acertos] = float(valor) if valor else 0.0
+                            try:
+                                premiacoes[acertos] = float(str(valor).replace(",", ".")) if valor else 0.0
+                            except (ValueError, TypeError):
+                                premiacoes[acertos] = 0.0
 
                     logger.info(f"Resultado completo do concurso {concurso_numero} ({tipo}) obtido via {url}")
                     return {
@@ -233,6 +241,18 @@ class ResultadoService:
             if premio_usuario <= 0:
                 continue
 
+            # Idempotência: verificar se já foi creditado para este concurso
+            existing = supabase.table("transacoes")\
+                .select("id")\
+                .eq("usuario_id", usuario_id)\
+                .eq("origem", "premiacao")\
+                .like_("descricao", f"%Concurso {concurso_numero}%")\
+                .limit(1)\
+                .execute()
+            if existing.data:
+                logger.info(f"Crédito concurso {concurso_numero} já existe para {usuario_id} — pulando")
+                continue
+
             # C5 — Creditar prêmio via RPC atômico (UPDATE carteira + INSERT transacao em uma transação SQL)
             descricao = f"Prêmio {bolao_nome} - Concurso {concurso_numero} ({qtd_cotas} cota{'s' if qtd_cotas > 1 else ''})"
             rpc_result = supabase.rpc("creditar_carteira", {
@@ -254,18 +274,29 @@ class ResultadoService:
         if cotas_nao_vendidas > 0 and criador_id:
             premio_criador = round((cotas_nao_vendidas / total_cotas) * premio_total, 2)
             if premio_criador > 0:
-                descricao_criador = f"Prêmio (criador) {bolao_nome} - Concurso {concurso_numero} ({cotas_nao_vendidas} cotas não vendidas)"
-                rpc_result = supabase.rpc("creditar_carteira", {
-                    "p_usuario_id": criador_id,
-                    "p_valor": premio_criador,
-                    "p_origem": "premiacao",
-                    "p_referencia_id": bolao_id,
-                    "p_descricao": descricao_criador,
-                }).execute()
-                if rpc_result.error:
-                    logger.error(f"Erro ao creditar criador {criador_id} pelas cotas não vendidas: {rpc_result.error}")
+                # Idempotência para o criador
+                existing_c = supabase.table("transacoes")\
+                    .select("id")\
+                    .eq("usuario_id", criador_id)\
+                    .eq("origem", "premiacao")\
+                    .like_("descricao", f"%Concurso {concurso_numero}%")\
+                    .limit(1)\
+                    .execute()
+                if existing_c.data:
+                    logger.info(f"Crédito concurso {concurso_numero} já existe para criador {criador_id} — pulando")
                 else:
-                    logger.info(f"Prêmio R$ {premio_criador} creditado ao criador {criador_id} ({cotas_nao_vendidas} cotas não vendidas)")
+                    descricao_criador = f"Prêmio (criador) {bolao_nome} - Concurso {concurso_numero} ({cotas_nao_vendidas} cotas não vendidas)"
+                    rpc_result = supabase.rpc("creditar_carteira", {
+                        "p_usuario_id": criador_id,
+                        "p_valor": premio_criador,
+                        "p_origem": "premiacao",
+                        "p_referencia_id": bolao_id,
+                        "p_descricao": descricao_criador,
+                    }).execute()
+                    if rpc_result.error:
+                        logger.error(f"Erro ao creditar criador {criador_id} pelas cotas não vendidas: {rpc_result.error}")
+                    else:
+                        logger.info(f"Prêmio R$ {premio_criador} creditado ao criador {criador_id} ({cotas_nao_vendidas} cotas não vendidas)")
 
         # Registrar premiação
         supabase.table("premiacoes_bolao").insert({
