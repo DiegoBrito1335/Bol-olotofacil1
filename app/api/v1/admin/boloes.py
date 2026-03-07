@@ -708,10 +708,49 @@ async def apurar_bolao_automatico(bolao_id: str):
     bolao = existing.data[0] if isinstance(existing.data, list) else existing.data
 
     if bolao["status"] == "apurado":
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Este bolão já foi apurado"
+        # Para teimosinhas: retry via apurar_todos_concursos (tem loop pendentes_premio)
+        if BolaoService.is_teimosinha(bolao):
+            resultado = await ResultadoService.apurar_todos_concursos(bolao_id)
+            return resultado
+
+        # Para concurso único: verificar se há prêmio pendente de distribuir
+        concurso = bolao["concurso_numero"]
+        tipo = bolao.get("tipo") or "lotofacil"
+        prem = supabase.table("premiacoes_bolao").select("premio_total")\
+            .eq("bolao_id", bolao_id).eq("concurso_numero", concurso).execute()
+        premio_existente = float(prem.data[0]["premio_total"]) if prem.data else 0.0
+        if premio_existente > 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Este bolão já foi apurado e o prêmio já foi distribuído"
+            )
+        # Prêmio pendente (0 ou sem registro) — tentar distribuir agora
+        resultado_completo = await ResultadoService.buscar_resultado_completo(concurso, tipo)
+        premiacoes = resultado_completo.get("premiacoes", {}) if resultado_completo else {}
+        if not premiacoes or not any(v > 0 for v in premiacoes.values()):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Bolão já apurado. Prêmio ainda não disponível na API — tente novamente mais tarde"
+            )
+        acertos_res = supabase.table("acertos_concurso").select("jogo_id, acertos")\
+            .eq("bolao_id", bolao_id).eq("concurso_numero", concurso).execute()
+        jogos_retry = [
+            {"jogo_id": a["jogo_id"], "dezenas": [], "acertos": a["acertos"]}
+            for a in (acertos_res.data or [])
+        ]
+        if not jogos_retry:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Bolão já apurado mas acertos não encontrados — use redistribuir-premio"
+            )
+        premio = await ResultadoService.calcular_e_distribuir_premio(
+            bolao_id, concurso, premiacoes, jogos_retry, tipo
         )
+        return {
+            "mensagem": f"Prêmio R$ {premio:.2f} distribuído (retry)",
+            "premio_total": round(premio, 2),
+            "bolao_id": bolao_id,
+        }
 
     # Verificar se tem jogos
     jogos_result = supabase.table("jogos_bolao").select("id").eq("bolao_id", bolao_id).execute()

@@ -97,6 +97,43 @@ async def cron_apurar_resultados(
                 "erro": str(e),
             })
 
+    # Retry: bolões concurso único já apurados com prêmio pendente (premio_total=0)
+    apurados_result = supabase.table("boloes")\
+        .select("id, nome, concurso_numero, concurso_fim, tipo")\
+        .eq("status", "apurado")\
+        .execute()
+    for bolao in (apurados_result.data or []):
+        if BolaoService.is_teimosinha(bolao):
+            continue  # teimosinhas já têm retry próprio no apurar_todos_concursos
+        bid = bolao["id"]
+        concurso = bolao["concurso_numero"]
+        tipo = bolao.get("tipo") or "lotofacil"
+        prem = supabase.table("premiacoes_bolao").select("premio_total")\
+            .eq("bolao_id", bid).eq("concurso_numero", concurso).execute()
+        if prem.data and float(prem.data[0]["premio_total"]) > 0:
+            continue  # prêmio já distribuído
+        try:
+            resultado_completo = await ResultadoService.buscar_resultado_completo(concurso, tipo)
+            premiacoes = resultado_completo.get("premiacoes", {}) if resultado_completo else {}
+            if not premiacoes or not any(v > 0 for v in premiacoes.values()):
+                continue
+            acertos_res = supabase.table("acertos_concurso").select("jogo_id, acertos")\
+                .eq("bolao_id", bid).eq("concurso_numero", concurso).execute()
+            jogos_retry = [
+                {"jogo_id": a["jogo_id"], "dezenas": [], "acertos": a["acertos"]}
+                for a in (acertos_res.data or [])
+            ]
+            if not jogos_retry:
+                continue
+            premio = await ResultadoService.calcular_e_distribuir_premio(
+                bid, concurso, premiacoes, jogos_retry, tipo
+            )
+            if premio > 0:
+                logger.info(f"Cron retry: prêmio R$ {premio:.2f} distribuído para bolão {bolao['nome']}")
+                resultados.append({"bolao_id": bid, "nome": bolao["nome"], "premio_retry": round(premio, 2)})
+        except Exception as e:
+            logger.error(f"Cron: erro no retry de prêmio para {bid}: {e}")
+
     return {
         "mensagem": f"{len(resultados)} bolões processados",
         "boloes_processados": len(resultados),

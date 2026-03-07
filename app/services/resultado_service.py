@@ -420,13 +420,12 @@ class ResultadoService:
                 for jogo_res in jogos_resultado
             ]).execute()
 
-        # Buscar premiação e distribuir
-        premio_total = 0.0
+        # Buscar premiação e distribuir (sempre chamar, mesmo com premiacoes={})
         resultado_completo = await ResultadoService.buscar_resultado_completo(concurso, tipo)
-        if resultado_completo and resultado_completo.get("premiacoes"):
-            premio_total = await ResultadoService.calcular_e_distribuir_premio(
-                bolao_id, concurso, resultado_completo["premiacoes"], jogos_resultado, tipo
-            )
+        premiacoes_api = resultado_completo.get("premiacoes", {}) if resultado_completo else {}
+        premio_total = await ResultadoService.calcular_e_distribuir_premio(
+            bolao_id, concurso, premiacoes_api, jogos_resultado, tipo
+        )
 
         return {
             "bolao_id": bolao_id,
