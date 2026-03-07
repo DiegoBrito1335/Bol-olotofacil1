@@ -25,7 +25,7 @@ class ResultadoService:
             "url": "https://loteriascaixa-api.herokuapp.com/api/lotofacil/{concurso}",
             "campo_dezenas": "dezenas",
             "campo_premiacoes": "premiacoes",
-            "campo_valor": "premio",
+            "campo_valor": "valorPremio",
         },
     ]
     # APIs Mega-Sena em ordem de preferência
@@ -40,7 +40,7 @@ class ResultadoService:
             "url": "https://loteriascaixa-api.herokuapp.com/api/megasena/{concurso}",
             "campo_dezenas": "dezenas",
             "campo_premiacoes": "premiacoes",
-            "campo_valor": "premio",
+            "campo_valor": "valorPremio",
         },
     ]
     _HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; BolaoBot/1.0)"}
@@ -234,7 +234,6 @@ class ResultadoService:
                 "bolao_id": bolao_id,
                 "concurso_numero": concurso_numero,
                 "premio_total": round(premio_total, 2),
-                "distribuido": False,
             }).execute()
             return premio_total
 
