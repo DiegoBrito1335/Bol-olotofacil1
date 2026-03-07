@@ -186,12 +186,14 @@ class ResultadoService:
                 premio_total += premiacoes[acertos]
 
         if premio_total <= 0:
-            # Registrar premiação zerada
+            # Se há jogos premiáveis mas premio=0 → API ainda não atualizou os valores
+            # distribuido=False para que o retry automático tente novamente
+            tem_ganhadores_bolao = any(j["acertos"] >= min_acertos for j in jogos_resultado)
             supabase.table("premiacoes_bolao").insert({
                 "bolao_id": bolao_id,
                 "concurso_numero": concurso_numero,
                 "premio_total": 0,
-                "distribuido": True,
+                "distribuido": not tem_ganhadores_bolao,
             }).execute()
             return 0.0
 
@@ -298,13 +300,20 @@ class ResultadoService:
                     else:
                         logger.info(f"Prêmio R$ {premio_criador} creditado ao criador {criador_id} ({cotas_nao_vendidas} cotas não vendidas)")
 
-        # Registrar premiação
-        supabase.table("premiacoes_bolao").insert({
-            "bolao_id": bolao_id,
-            "concurso_numero": concurso_numero,
-            "premio_total": round(premio_total, 2),
-            "distribuido": True,
-        }).execute()
+        # Registrar premiação — upsert (pode ser re-tentativa de concurso com distribuido=False)
+        prem_check = supabase.table("premiacoes_bolao").select("id")\
+            .eq("bolao_id", bolao_id).eq("concurso_numero", concurso_numero).execute()
+        if prem_check.data:
+            supabase.table("premiacoes_bolao")\
+                .update({"premio_total": round(premio_total, 2), "distribuido": True})\
+                .eq("bolao_id", bolao_id).eq("concurso_numero", concurso_numero).execute()
+        else:
+            supabase.table("premiacoes_bolao").insert({
+                "bolao_id": bolao_id,
+                "concurso_numero": concurso_numero,
+                "premio_total": round(premio_total, 2),
+                "distribuido": True,
+            }).execute()
 
         logger.info(f"Prêmio total R$ {premio_total:.2f} distribuído para bolão {bolao_id} concurso {concurso_numero}")
         return premio_total
@@ -560,13 +569,6 @@ class ResultadoService:
         # Filtrar apenas concursos pendentes
         concursos_pendentes = [c for c in concursos if c not in concursos_ja_apurados]
 
-        if not concursos_pendentes:
-            return {
-                "bolao_id": bolao_id,
-                "mensagem": "Todos os concursos já foram apurados",
-                "resultados": [],
-            }
-
         resultados = []
         erros = []
         premio_total_geral = 0.0
@@ -602,6 +604,43 @@ class ResultadoService:
                 .update({"status": "apurado"})\
                 .eq("id", bolao_id)\
                 .execute()
+
+        # Re-tentar distribuição de prêmios para concursos com distribuido=False
+        # ou com premio_total=0 mas que tiveram ganhadores (API estava desatualizada)
+        premiacoes_dist = supabase.table("premiacoes_bolao")\
+            .select("concurso_numero, distribuido, premio_total")\
+            .eq("bolao_id", bolao_id).execute()
+        concursos_ok = {
+            r["concurso_numero"] for r in (premiacoes_dist.data or [])
+            if r["distribuido"] and float(r.get("premio_total") or 0) > 0
+        }
+        todos_apurados = {r["concurso_numero"] for r in (apurados_result.data or [])}
+        pendentes_premio = sorted(todos_apurados - concursos_ok)
+
+        for concurso in pendentes_premio:
+            resultado_completo = await ResultadoService.buscar_resultado_completo(concurso, tipo)
+            if not resultado_completo:
+                continue
+            premiacoes_retry = resultado_completo.get("premiacoes", {})
+            if not premiacoes_retry or not any(v > 0 for v in premiacoes_retry.values()):
+                continue  # API ainda retorna 0 — tentará na próxima execução
+
+            acertos_res = supabase.table("acertos_concurso")\
+                .select("jogo_id, acertos")\
+                .eq("bolao_id", bolao_id)\
+                .eq("concurso_numero", concurso).execute()
+            jogos_retry = [
+                {"jogo_id": a["jogo_id"], "dezenas": [], "acertos": a["acertos"]}
+                for a in (acertos_res.data or [])
+            ]
+            if not jogos_retry:
+                continue
+
+            premio = await ResultadoService.calcular_e_distribuir_premio(
+                bolao_id, concurso, premiacoes_retry, jogos_retry, tipo
+            )
+            premio_total_geral += premio
+            logger.info(f"Prêmio pendente R$ {premio:.2f} re-distribuído para concurso {concurso} do bolão {bolao_id}")
 
         return {
             "bolao_id": bolao_id,
