@@ -237,68 +237,75 @@ class ResultadoService:
             }).execute()
             return premio_total
 
-        # Distribuir para cada comprador de cotas
-        for usuario_id, qtd_cotas in cotas_por_usuario.items():
-            premio_usuario = round((qtd_cotas / total_cotas) * premio_total, 2)
-            if premio_usuario <= 0:
+        # Montar lista unificada: compradores + criador (cotas não vendidas)
+        cotas_nao_vendidas = total_cotas - total_cotas_vendidas
+        todos_participantes = []
+        for uid, qtd in cotas_por_usuario.items():
+            todos_participantes.append({
+                "usuario_id": uid, "qtd_cotas": qtd, "tipo": "comprador", "origem": "premiacao"
+            })
+        if cotas_nao_vendidas > 0 and criador_id:
+            todos_participantes.append({
+                "usuario_id": criador_id, "qtd_cotas": cotas_nao_vendidas,
+                "tipo": "criador", "origem": "premiacao_criador"
+            })
+
+        # Calcular valores com soma exata = premio_total (ajuste no último para eliminar diferença de arredondamento)
+        soma_ate_agora = 0.0
+        for i, p in enumerate(todos_participantes):
+            if i == len(todos_participantes) - 1:
+                p["valor"] = round(premio_total - soma_ate_agora, 2)
+            else:
+                p["valor"] = round((p["qtd_cotas"] / total_cotas) * premio_total, 2)
+                soma_ate_agora += p["valor"]
+
+        # Creditar cada participante
+        for p in todos_participantes:
+            usuario_id = p["usuario_id"]
+            valor = p["valor"]
+            origem = p["origem"]
+            qtd_cotas = p["qtd_cotas"]
+
+            if valor <= 0:
                 continue
 
             # Idempotência: verificar se já foi creditado para este concurso
             existing = supabase.table("transacoes")\
                 .select("id")\
                 .eq("usuario_id", usuario_id)\
-                .eq("origem", "premiacao")\
+                .eq("origem", origem)\
                 .like_("descricao", f"%Concurso {concurso_numero}%")\
-                .limit(1)\
-                .execute()
+                .limit(1).execute()
             if existing.data:
-                logger.info(f"Crédito concurso {concurso_numero} já existe para {usuario_id} — pulando")
+                logger.info(f"Crédito concurso {concurso_numero} já existe para {usuario_id} ({origem}) — pulando")
                 continue
 
-            # C5 — Creditar prêmio via RPC atômico (UPDATE carteira + INSERT transacao em uma transação SQL)
-            descricao = f"Prêmio {bolao_nome} - Concurso {concurso_numero} ({qtd_cotas} cota{'s' if qtd_cotas > 1 else ''})"
+            # Garantir que carteira existe antes de creditar
+            carteira_check = supabase.table("carteira").select("id").eq("usuario_id", usuario_id).execute()
+            if not carteira_check.data:
+                supabase.table("carteira").insert({
+                    "usuario_id": usuario_id, "saldo_disponivel": 0, "saldo_bloqueado": 0
+                }).execute()
+
+            # Descrição da transação
+            if p["tipo"] == "criador":
+                descricao = f"Prêmio (criador) {bolao_nome} - Concurso {concurso_numero} ({qtd_cotas} cotas não vendidas)"
+            else:
+                descricao = f"Prêmio {bolao_nome} - Concurso {concurso_numero} ({qtd_cotas} cota{'s' if qtd_cotas > 1 else ''})"
+
+            # Creditar via RPC atômico (UPDATE carteira + INSERT transacao em uma transação SQL)
             rpc_result = supabase.rpc("creditar_carteira", {
                 "p_usuario_id": usuario_id,
-                "p_valor": premio_usuario,
-                "p_origem": "premiacao",
+                "p_valor": valor,
+                "p_origem": origem,
                 "p_referencia_id": bolao_id,
                 "p_descricao": descricao,
             }).execute()
 
             if rpc_result.error:
-                logger.error(f"Erro no RPC creditar_carteira para usuário {usuario_id}: {rpc_result.error}")
-                continue
-
-            logger.info(f"Prêmio R$ {premio_usuario} creditado para usuário {usuario_id} (concurso {concurso_numero})")
-
-        # Creditar criador do bolão pelas cotas não vendidas
-        cotas_nao_vendidas = total_cotas - total_cotas_vendidas
-        if cotas_nao_vendidas > 0 and criador_id:
-            premio_criador = round((cotas_nao_vendidas / total_cotas) * premio_total, 2)
-            if premio_criador > 0:
-                # Idempotência para o criador
-                existing_c = supabase.table("transacoes")\
-                    .select("id")\
-                    .eq("usuario_id", criador_id)\
-                    .eq("origem", "premiacao_criador")\
-                    .like_("descricao", f"%Concurso {concurso_numero}%")\
-                    .limit(1)\
-                    .execute()
-                if existing_c.data:
-                    logger.info(f"Crédito concurso {concurso_numero} já existe para criador {criador_id} — pulando")
-                else:
-                    descricao_criador = f"Prêmio (criador) {bolao_nome} - Concurso {concurso_numero} ({cotas_nao_vendidas} cotas não vendidas)"
-                    rpc_result = supabase.rpc("creditar_carteira", {
-                        "p_usuario_id": criador_id,
-                        "p_valor": premio_criador,
-                        "p_origem": "premiacao_criador",
-                        "p_referencia_id": bolao_id,
-                        "p_descricao": descricao_criador,
-                    }).execute()
-                    if rpc_result.error:
-                        logger.error(f"Erro ao creditar criador {criador_id} pelas cotas não vendidas: {rpc_result.error}")
-                    else:
-                        logger.info(f"Prêmio R$ {premio_criador} creditado ao criador {criador_id} ({cotas_nao_vendidas} cotas não vendidas)")
+                logger.error(f"Erro no RPC creditar_carteira para {usuario_id} ({origem}): {rpc_result.error}")
+            else:
+                logger.info(f"Prêmio R$ {valor} creditado para {usuario_id} ({origem}, concurso {concurso_numero})")
 
         # Registrar premiação — upsert (pode ser re-tentativa de concurso com premio_total=0)
         prem_check = supabase.table("premiacoes_bolao").select("id")\

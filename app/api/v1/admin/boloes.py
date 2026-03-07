@@ -1107,8 +1107,7 @@ async def redistribuir_premio(
 ):
     """
     Re-credita o prêmio de um concurso já apurado nas carteiras dos participantes.
-    Usar quando o crédito automático falhou (ex: apurado com código antigo sem admin key).
-    ATENÇÃO: sem idempotência — chamar apenas UMA VEZ por bolão/concurso.
+    Usar quando o crédito automático falhou. Idempotente: pula créditos já realizados.
     """
     # 1. Verificar bolão existe e pegar tipo
     bolao_check = supabase.table("boloes")\
@@ -1183,66 +1182,75 @@ async def redistribuir_premio(
     if total_cotas == 0:
         total_cotas = total_vendidas
 
+    # 5. Montar lista unificada: compradores + criador (cotas não vendidas)
+    nao_vendidas = total_cotas - total_vendidas
+    todos_participantes = []
+    for uid, qtd in cotas_por_usuario.items():
+        todos_participantes.append({
+            "usuario_id": uid, "qtd_cotas": qtd, "tipo": "comprador", "origem": "premiacao"
+        })
+    if nao_vendidas > 0 and criador_id:
+        todos_participantes.append({
+            "usuario_id": criador_id, "qtd_cotas": nao_vendidas,
+            "tipo": "criador", "origem": "premiacao_criador"
+        })
+
+    # Calcular valores com soma exata = premio_total (ajuste no último)
+    soma_ate_agora = 0.0
+    for i, p in enumerate(todos_participantes):
+        if i == len(todos_participantes) - 1:
+            p["valor"] = round(premio_total - soma_ate_agora, 2)
+        else:
+            p["valor"] = round((p["qtd_cotas"] / total_cotas) * premio_total, 2)
+            soma_ate_agora += p["valor"]
+
     creditados: list = []
     ja_creditados: list = []
     erros: list = []
 
-    # 5. Creditar compradores proporcionalmente
-    for uid, qtd in cotas_por_usuario.items():
-        valor = round((qtd / total_cotas) * premio_total, 2)
+    # 6. Creditar cada participante com idempotência
+    for p in todos_participantes:
+        uid = p["usuario_id"]
+        valor = p["valor"]
+        origem = p["origem"]
+        qtd = p["qtd_cotas"]
+
         if valor <= 0:
             continue
-        desc = f"Prêmio {bolao_nome} - Concurso {concurso_numero} ({qtd} cota{'s' if qtd > 1 else ''})"
-        # Idempotência: verificar se já foi creditado para este concurso
+
+        if p["tipo"] == "criador":
+            desc = f"Prêmio (criador) {bolao_nome} - Concurso {concurso_numero} ({qtd} cotas não vendidas)"
+        else:
+            desc = f"Prêmio {bolao_nome} - Concurso {concurso_numero} ({qtd} cota{'s' if qtd > 1 else ''})"
+
         existing = supabase.table("transacoes")\
             .select("id")\
             .eq("usuario_id", uid)\
-            .eq("origem", "premiacao")\
+            .eq("origem", origem)\
             .like_("descricao", f"%Concurso {concurso_numero}%")\
-            .limit(1)\
-            .execute()
+            .limit(1).execute()
         if existing.data:
-            ja_creditados.append({"usuario_id": uid, "valor": valor})
+            ja_creditados.append({"usuario_id": uid, "valor": valor, "tipo": p["tipo"]})
             continue
+
+        # Garantir que carteira existe antes de creditar
+        carteira_check = supabase.table("carteira").select("id").eq("usuario_id", uid).execute()
+        if not carteira_check.data:
+            supabase.table("carteira").insert({
+                "usuario_id": uid, "saldo_disponivel": 0, "saldo_bloqueado": 0
+            }).execute()
+
         r = supabase.rpc("creditar_carteira", {
             "p_usuario_id": uid,
             "p_valor": valor,
-            "p_origem": "premiacao",
+            "p_origem": origem,
             "p_referencia_id": bolao_id,
             "p_descricao": desc,
         }).execute()
         if r.error:
-            erros.append({"usuario_id": uid, "valor": valor, "erro": str(r.error)})
+            erros.append({"usuario_id": uid, "valor": valor, "tipo": p["tipo"], "erro": str(r.error)})
         else:
-            creditados.append({"usuario_id": uid, "valor": valor})
-
-    # 6. Creditar criador pelas cotas não vendidas
-    nao_vendidas = total_cotas - total_vendidas
-    if nao_vendidas > 0 and criador_id:
-        valor_criador = round((nao_vendidas / total_cotas) * premio_total, 2)
-        if valor_criador > 0:
-            desc_c = f"Prêmio (criador) {bolao_nome} - Concurso {concurso_numero} ({nao_vendidas} cotas não vendidas)"
-            existing_c = supabase.table("transacoes")\
-                .select("id")\
-                .eq("usuario_id", criador_id)\
-                .eq("origem", "premiacao_criador")\
-                .like_("descricao", f"%Concurso {concurso_numero}%")\
-                .limit(1)\
-                .execute()
-            if existing_c.data:
-                ja_creditados.append({"usuario_id": criador_id, "valor": valor_criador, "tipo": "criador"})
-            else:
-                r = supabase.rpc("creditar_carteira", {
-                    "p_usuario_id": criador_id,
-                    "p_valor": valor_criador,
-                    "p_origem": "premiacao_criador",
-                    "p_referencia_id": bolao_id,
-                    "p_descricao": desc_c,
-                }).execute()
-                if r.error:
-                    erros.append({"usuario_id": criador_id, "valor": valor_criador, "tipo": "criador", "erro": str(r.error)})
-                else:
-                    creditados.append({"usuario_id": criador_id, "valor": valor_criador, "tipo": "criador"})
+            creditados.append({"usuario_id": uid, "valor": valor, "tipo": p["tipo"]})
 
     return {
         "premio_total": premio_total,
