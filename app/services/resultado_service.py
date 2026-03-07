@@ -187,14 +187,15 @@ class ResultadoService:
 
         if premio_total <= 0:
             # Se há jogos premiáveis mas premio=0 → API ainda não atualizou os valores
-            # distribuido=False para que o retry automático tente novamente
-            tem_ganhadores_bolao = any(j["acertos"] >= min_acertos for j in jogos_resultado)
-            supabase.table("premiacoes_bolao").insert({
-                "bolao_id": bolao_id,
-                "concurso_numero": concurso_numero,
-                "premio_total": 0,
-                "distribuido": not tem_ganhadores_bolao,
-            }).execute()
+            # Salvar registro com premio_total=0 para rastrear (retry automático tenta novamente)
+            prem_zero = supabase.table("premiacoes_bolao").select("id")\
+                .eq("bolao_id", bolao_id).eq("concurso_numero", concurso_numero).execute()
+            if not prem_zero.data:
+                supabase.table("premiacoes_bolao").insert({
+                    "bolao_id": bolao_id,
+                    "concurso_numero": concurso_numero,
+                    "premio_total": 0,
+                }).execute()
             return 0.0
 
         # Buscar dados do bolão (nome, valor_cota, total_cotas e criador_id)
@@ -300,19 +301,18 @@ class ResultadoService:
                     else:
                         logger.info(f"Prêmio R$ {premio_criador} creditado ao criador {criador_id} ({cotas_nao_vendidas} cotas não vendidas)")
 
-        # Registrar premiação — upsert (pode ser re-tentativa de concurso com distribuido=False)
+        # Registrar premiação — upsert (pode ser re-tentativa de concurso com premio_total=0)
         prem_check = supabase.table("premiacoes_bolao").select("id")\
             .eq("bolao_id", bolao_id).eq("concurso_numero", concurso_numero).execute()
         if prem_check.data:
             supabase.table("premiacoes_bolao")\
-                .update({"premio_total": round(premio_total, 2), "distribuido": True})\
+                .update({"premio_total": round(premio_total, 2)})\
                 .eq("bolao_id", bolao_id).eq("concurso_numero", concurso_numero).execute()
         else:
             supabase.table("premiacoes_bolao").insert({
                 "bolao_id": bolao_id,
                 "concurso_numero": concurso_numero,
                 "premio_total": round(premio_total, 2),
-                "distribuido": True,
             }).execute()
 
         logger.info(f"Prêmio total R$ {premio_total:.2f} distribuído para bolão {bolao_id} concurso {concurso_numero}")
@@ -605,14 +605,14 @@ class ResultadoService:
                 .eq("id", bolao_id)\
                 .execute()
 
-        # Re-tentar distribuição de prêmios para concursos com distribuido=False
-        # ou com premio_total=0 mas que tiveram ganhadores (API estava desatualizada)
+        # Re-tentar distribuição de prêmios para concursos com premio_total=0
+        # (API estava desatualizada no momento da apuração)
         premiacoes_dist = supabase.table("premiacoes_bolao")\
-            .select("concurso_numero, distribuido, premio_total")\
+            .select("concurso_numero, premio_total")\
             .eq("bolao_id", bolao_id).execute()
         concursos_ok = {
             r["concurso_numero"] for r in (premiacoes_dist.data or [])
-            if r["distribuido"] and float(r.get("premio_total") or 0) > 0
+            if float(r.get("premio_total") or 0) > 0
         }
         todos_apurados = {r["concurso_numero"] for r in (apurados_result.data or [])}
         pendentes_premio = sorted(todos_apurados - concursos_ok)

@@ -898,14 +898,15 @@ async def status_apuracao(bolao_id: str):
 
     # Buscar premiações
     premiacoes_result = supabase.table("premiacoes_bolao")\
-        .select("concurso_numero, premio_total, distribuido")\
+        .select("concurso_numero, premio_total")\
         .eq("bolao_id", bolao_id)\
         .execute()
     premiacoes_map = {}
     for p in (premiacoes_result.data or []):
+        val = float(p["premio_total"])
         premiacoes_map[p["concurso_numero"]] = {
-            "premio_total": float(p["premio_total"]),
-            "distribuido": p["distribuido"],
+            "premio_total": val,
+            "distribuido": val > 0,
         }
 
     status_concursos = [
@@ -1070,19 +1071,53 @@ async def redistribuir_premio(
     Usar quando o crédito automático falhou (ex: apurado com código antigo sem admin key).
     ATENÇÃO: sem idempotência — chamar apenas UMA VEZ por bolão/concurso.
     """
-    # 1. Verificar premiacoes_bolao
+    # 1. Verificar bolão existe e pegar tipo
+    bolao_check = supabase.table("boloes")\
+        .select("tipo")\
+        .eq("id", bolao_id)\
+        .execute()
+    if not bolao_check.data:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Bolão não encontrado")
+    tipo_bolao = bolao_check.data[0].get("tipo") or "lotofacil"
+
+    # 2. Verificar premiacoes_bolao
     prem = supabase.table("premiacoes_bolao")\
         .select("premio_total")\
         .eq("bolao_id", bolao_id)\
         .eq("concurso_numero", concurso_numero)\
         .execute()
-    if not prem.data:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Premiação não encontrada para este bolão/concurso")
-    premio_total = float(prem.data[0]["premio_total"])
-    if premio_total <= 0:
-        return {"detail": "Prêmio zero, nada a redistribuir"}
+    premio_total = float(prem.data[0]["premio_total"]) if prem.data else 0.0
 
-    # 2. Buscar dados do bolão
+    # Se premio_total=0, tentar buscar da API e calcular pelo bolão
+    if premio_total <= 0:
+        resultado_completo = await ResultadoService.buscar_resultado_completo(concurso_numero, tipo_bolao)
+        if not resultado_completo:
+            return {"detail": "Prêmio zero e API não retornou dados para este concurso"}
+        premiacoes_api = resultado_completo.get("premiacoes", {})
+        if not premiacoes_api or not any(v > 0 for v in premiacoes_api.values()):
+            return {"detail": "Prêmio zero e API ainda não publicou os valores deste concurso"}
+
+        # Buscar acertos já salvos
+        acertos_res = supabase.table("acertos_concurso")\
+            .select("jogo_id, acertos")\
+            .eq("bolao_id", bolao_id)\
+            .eq("concurso_numero", concurso_numero).execute()
+        if not acertos_res.data:
+            return {"detail": "Acertos do concurso não encontrados — apure o bolão primeiro"}
+
+        jogos_retry = [
+            {"jogo_id": a["jogo_id"], "dezenas": [], "acertos": a["acertos"]}
+            for a in acertos_res.data
+        ]
+        premio_distribuido = await ResultadoService.calcular_e_distribuir_premio(
+            bolao_id, concurso_numero, premiacoes_api, jogos_retry, tipo_bolao
+        )
+        return {
+            "premio_total": round(premio_distribuido, 2),
+            "mensagem": f"Prêmio R$ {premio_distribuido:.2f} calculado da API e distribuído",
+        }
+
+    # 3. Buscar dados do bolão
     bolao_r = supabase.table("boloes")\
         .select("nome, valor_cota, total_cotas, criador_id")\
         .eq("id", bolao_id)\
@@ -1095,7 +1130,7 @@ async def redistribuir_premio(
     criador_id = b.get("criador_id")
     bolao_nome = b["nome"]
 
-    # 3. Buscar e agrupar cotas vendidas por usuário
+    # 4. Buscar e agrupar cotas vendidas por usuário
     cotas_r = supabase.table("cotas")\
         .select("usuario_id, valor_pago")\
         .eq("bolao_id", bolao_id)\
@@ -1113,7 +1148,7 @@ async def redistribuir_premio(
     ja_creditados: list = []
     erros: list = []
 
-    # 4. Creditar compradores proporcionalmente
+    # 5. Creditar compradores proporcionalmente
     for uid, qtd in cotas_por_usuario.items():
         valor = round((qtd / total_cotas) * premio_total, 2)
         if valor <= 0:
@@ -1142,7 +1177,7 @@ async def redistribuir_premio(
         else:
             creditados.append({"usuario_id": uid, "valor": valor})
 
-    # 5. Creditar criador pelas cotas não vendidas
+    # 6. Creditar criador pelas cotas não vendidas
     nao_vendidas = total_cotas - total_vendidas
     if nao_vendidas > 0 and criador_id:
         valor_criador = round((nao_vendidas / total_cotas) * premio_total, 2)
