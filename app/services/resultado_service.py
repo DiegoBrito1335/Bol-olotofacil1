@@ -280,7 +280,7 @@ class ResultadoService:
                 existing_c = supabase.table("transacoes")\
                     .select("id")\
                     .eq("usuario_id", criador_id)\
-                    .eq("origem", "premiacao")\
+                    .eq("origem", "premiacao_criador")\
                     .like_("descricao", f"%Concurso {concurso_numero}%")\
                     .limit(1)\
                     .execute()
@@ -291,7 +291,7 @@ class ResultadoService:
                     rpc_result = supabase.rpc("creditar_carteira", {
                         "p_usuario_id": criador_id,
                         "p_valor": premio_criador,
-                        "p_origem": "premiacao",
+                        "p_origem": "premiacao_criador",
                         "p_referencia_id": bolao_id,
                         "p_descricao": descricao_criador,
                     }).execute()
