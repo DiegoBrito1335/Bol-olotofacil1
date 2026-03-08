@@ -713,18 +713,9 @@ async def apurar_bolao_automatico(bolao_id: str):
             resultado = await ResultadoService.apurar_todos_concursos(bolao_id)
             return resultado
 
-        # Para concurso único: verificar se há prêmio pendente de distribuir
+        # Para concurso único: tentar/re-tentar distribuição (idempotente — pula já-creditados)
         concurso = bolao["concurso_numero"]
         tipo = bolao.get("tipo") or "lotofacil"
-        prem = supabase.table("premiacoes_bolao").select("premio_total")\
-            .eq("bolao_id", bolao_id).eq("concurso_numero", concurso).execute()
-        premio_existente = float(prem.data[0]["premio_total"]) if prem.data else 0.0
-        if premio_existente > 0:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Este bolão já foi apurado e o prêmio já foi distribuído"
-            )
-        # Prêmio pendente (0 ou sem registro) — tentar distribuir agora
         resultado_completo = await ResultadoService.buscar_resultado_completo(concurso, tipo)
         premiacoes = resultado_completo.get("premiacoes", {}) if resultado_completo else {}
         if not premiacoes or not any(v > 0 for v in premiacoes.values()):

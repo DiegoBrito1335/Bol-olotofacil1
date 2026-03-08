@@ -260,6 +260,7 @@ class ResultadoService:
                 soma_ate_agora += p["valor"]
 
         # Creditar cada participante
+        has_errors = False
         for p in todos_participantes:
             usuario_id = p["usuario_id"]
             valor = p["valor"]
@@ -304,21 +305,25 @@ class ResultadoService:
 
             if rpc_result.error:
                 logger.error(f"Erro no RPC creditar_carteira para {usuario_id} ({origem}): {rpc_result.error}")
+                has_errors = True  # forçar retry automático na próxima execução
             else:
                 logger.info(f"Prêmio R$ {valor} creditado para {usuario_id} ({origem}, concurso {concurso_numero})")
 
-        # Registrar premiação — upsert (pode ser re-tentativa de concurso com premio_total=0)
+        # Registrar premiação:
+        # - has_errors=False → salvar valor real (distribuição OK, retry loops pulam este concurso)
+        # - has_errors=True  → salvar 0 (força retry automático pelo loop pendentes_premio)
         prem_check = supabase.table("premiacoes_bolao").select("id")\
             .eq("bolao_id", bolao_id).eq("concurso_numero", concurso_numero).execute()
+        premio_a_salvar = round(premio_total, 2) if not has_errors else 0.0
         if prem_check.data:
             supabase.table("premiacoes_bolao")\
-                .update({"premio_total": round(premio_total, 2)})\
+                .update({"premio_total": premio_a_salvar})\
                 .eq("bolao_id", bolao_id).eq("concurso_numero", concurso_numero).execute()
         else:
             supabase.table("premiacoes_bolao").insert({
                 "bolao_id": bolao_id,
                 "concurso_numero": concurso_numero,
-                "premio_total": round(premio_total, 2),
+                "premio_total": premio_a_salvar,
             }).execute()
 
         logger.info(f"Prêmio total R$ {premio_total:.2f} distribuído para bolão {bolao_id} concurso {concurso_numero}")
