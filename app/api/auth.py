@@ -2,11 +2,11 @@
 Rotas de autenticação e registro de usuários
 """
 
-from fastapi import APIRouter, HTTPException, Request, status
+from fastapi import APIRouter, Cookie, HTTPException, Request, Response, status
 from pydantic import BaseModel
 from typing import Optional
 from app.core.supabase import supabase_admin as supabase
-from app.core.security import create_access_token
+from app.core.security import create_access_token, verify_token
 from app.core.limiter import limiter
 from app.config import settings
 import logging
@@ -177,12 +177,11 @@ class LoginResponse(BaseModel):
     nome: str
     email: str
     is_admin: bool = False
-    access_token: str
 
 
 @router.post("/login", response_model=LoginResponse)
 @limiter.limit("10/minute")
-async def login_usuario(request: Request, body: LoginRequest):
+async def login_usuario(request: Request, response: Response, body: LoginRequest):
     """
     Autentica um usuário com e-mail e senha via Supabase Auth.
     Retorna um JWT assinado para uso como Bearer token.
@@ -267,11 +266,21 @@ async def login_usuario(request: Request, body: LoginRequest):
         if admins_result.data:
             is_admin = True
 
-    # Gerar JWT assinado com SECRET_KEY
+    # Gerar JWT assinado com SECRET_KEY e definir cookie httpOnly
     access_token = create_access_token(
         user_id=usuario_id,
         email=user_email,
         is_admin=is_admin,
+    )
+    is_prod = settings.ENVIRONMENT == "production"
+    response.set_cookie(
+        key="auth_token",
+        value=access_token,
+        httponly=True,
+        secure=is_prod,
+        samesite="none" if is_prod else "lax",
+        max_age=60 * 60 * 12,
+        path="/",
     )
 
     return LoginResponse(
@@ -279,8 +288,46 @@ async def login_usuario(request: Request, body: LoginRequest):
         nome=nome,
         email=user_email,
         is_admin=is_admin,
-        access_token=access_token,
     )
+
+
+@router.get("/me")
+async def get_me(auth_token: Optional[str] = Cookie(None)):
+    """
+    Retorna dados do usuário autenticado a partir do cookie httpOnly.
+    Usado pelo frontend para restaurar sessão após reload da página.
+    """
+    if not auth_token:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Não autenticado")
+    try:
+        payload = verify_token(auth_token)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(e))
+    user_id = payload.get("sub")
+    perfil = supabase.table("usuarios").select("nome").eq("id", user_id).execute()
+    nome = (perfil.data[0].get("nome") or "") if perfil.data else ""
+    return {
+        "id": user_id,
+        "email": payload.get("email"),
+        "is_admin": payload.get("is_admin", False),
+        "nome": nome,
+    }
+
+
+@router.post("/logout")
+async def logout(response: Response):
+    """
+    Encerra a sessão removendo o cookie de autenticação.
+    """
+    is_prod = settings.ENVIRONMENT == "production"
+    response.delete_cookie(
+        key="auth_token",
+        httponly=True,
+        secure=is_prod,
+        samesite="none" if is_prod else "lax",
+        path="/",
+    )
+    return {"mensagem": "Logout realizado"}
 
 
 class ForgotPasswordRequest(BaseModel):
