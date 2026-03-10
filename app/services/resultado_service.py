@@ -309,12 +309,13 @@ class ResultadoService:
             else:
                 logger.info(f"Prêmio R$ {valor} creditado para {usuario_id} ({origem}, concurso {concurso_numero})")
 
-        # Registrar premiação:
-        # - has_errors=False → salvar valor real (distribuição OK, retry loops pulam este concurso)
-        # - has_errors=True  → salvar 0 (força retry automático pelo loop pendentes_premio)
+        # Registrar premiação — sempre salvar o valor calculado.
+        # Se créditos individuais falharam (has_errors), logar para retry manual via redistribuir-premio.
+        if has_errors:
+            logger.warning(f"Créditos com falha no bolão {bolao_id} concurso {concurso_numero} — use redistribuir-premio para retentar")
         prem_check = supabase.table("premiacoes_bolao").select("id")\
             .eq("bolao_id", bolao_id).eq("concurso_numero", concurso_numero).execute()
-        premio_a_salvar = round(premio_total, 2) if not has_errors else 0.0
+        premio_a_salvar = round(premio_total, 2)
         if prem_check.data:
             supabase.table("premiacoes_bolao")\
                 .update({"premio_total": premio_a_salvar})\

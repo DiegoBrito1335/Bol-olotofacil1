@@ -1125,137 +1125,29 @@ async def redistribuir_premio(
         .execute()
     premio_total = float(prem.data[0]["premio_total"]) if prem.data else 0.0
 
-    # Se premio_total=0, tentar buscar da API e calcular pelo bolão
-    if premio_total <= 0:
-        resultado_completo = await ResultadoService.buscar_resultado_completo(concurso_numero, tipo_bolao)
-        if not resultado_completo:
-            return {"detail": "Prêmio zero e API não retornou dados para este concurso"}
-        premiacoes_api = resultado_completo.get("premiacoes", {})
-        if not premiacoes_api or not any(v > 0 for v in premiacoes_api.values()):
-            return {"detail": "Prêmio zero e API ainda não publicou os valores deste concurso"}
+    # Sempre tentar redistribuir — calcular_e_distribuir_premio é idempotente
+    resultado_completo = await ResultadoService.buscar_resultado_completo(concurso_numero, tipo_bolao)
+    if not resultado_completo:
+        return {"detail": "API não retornou dados para este concurso"}
+    premiacoes_api = resultado_completo.get("premiacoes", {})
+    if not premiacoes_api or not any(v > 0 for v in premiacoes_api.values()):
+        return {"detail": "API ainda não publicou os valores deste concurso"}
 
-        # Buscar acertos já salvos
-        acertos_res = supabase.table("acertos_concurso")\
-            .select("jogo_id, acertos")\
-            .eq("bolao_id", bolao_id)\
-            .eq("concurso_numero", concurso_numero).execute()
-        if not acertos_res.data:
-            return {"detail": "Acertos do concurso não encontrados — apure o bolão primeiro"}
-
-        jogos_retry = [
-            {"jogo_id": a["jogo_id"], "dezenas": [], "acertos": a["acertos"]}
-            for a in acertos_res.data
-        ]
-        premio_distribuido = await ResultadoService.calcular_e_distribuir_premio(
-            bolao_id, concurso_numero, premiacoes_api, jogos_retry, tipo_bolao
-        )
-        return {
-            "premio_total": round(premio_distribuido, 2),
-            "mensagem": f"Prêmio R$ {premio_distribuido:.2f} calculado da API e distribuído",
-        }
-
-    # 3. Buscar dados do bolão
-    bolao_r = supabase.table("boloes")\
-        .select("nome, valor_cota, total_cotas, criador_id")\
-        .eq("id", bolao_id)\
-        .execute()
-    if not bolao_r.data:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Bolão não encontrado")
-    b = bolao_r.data[0]
-    valor_cota = float(b["valor_cota"])
-    total_cotas = int(b["total_cotas"])
-    criador_id = b.get("criador_id")
-    bolao_nome = b["nome"]
-
-    # 4. Buscar e agrupar cotas vendidas por usuário
-    cotas_r = supabase.table("cotas")\
-        .select("usuario_id, valor_pago")\
+    acertos_res = supabase.table("acertos_concurso")\
+        .select("jogo_id, acertos")\
         .eq("bolao_id", bolao_id)\
-        .execute()
-    cotas_por_usuario: dict = {}
-    for c in (cotas_r.data or []):
-        uid = c["usuario_id"]
-        qtd = max(1, round(float(c["valor_pago"]) / valor_cota)) if valor_cota > 0 else 1
-        cotas_por_usuario[uid] = cotas_por_usuario.get(uid, 0) + qtd
-    total_vendidas = sum(cotas_por_usuario.values())
-    if total_cotas == 0:
-        total_cotas = total_vendidas
+        .eq("concurso_numero", concurso_numero).execute()
+    if not acertos_res.data:
+        return {"detail": "Acertos não encontrados — apure o bolão primeiro"}
 
-    # 5. Montar lista unificada: compradores + criador (cotas não vendidas)
-    nao_vendidas = total_cotas - total_vendidas
-    todos_participantes = []
-    for uid, qtd in cotas_por_usuario.items():
-        todos_participantes.append({
-            "usuario_id": uid, "qtd_cotas": qtd, "tipo": "comprador", "origem": "premiacao"
-        })
-    if nao_vendidas > 0 and criador_id:
-        todos_participantes.append({
-            "usuario_id": criador_id, "qtd_cotas": nao_vendidas,
-            "tipo": "criador", "origem": "premiacao_criador"
-        })
-
-    # Calcular valores com soma exata = premio_total (ajuste no último)
-    soma_ate_agora = 0.0
-    for i, p in enumerate(todos_participantes):
-        if i == len(todos_participantes) - 1:
-            p["valor"] = round(premio_total - soma_ate_agora, 2)
-        else:
-            p["valor"] = round((p["qtd_cotas"] / total_cotas) * premio_total, 2)
-            soma_ate_agora += p["valor"]
-
-    creditados: list = []
-    ja_creditados: list = []
-    erros: list = []
-
-    # 6. Creditar cada participante com idempotência
-    for p in todos_participantes:
-        uid = p["usuario_id"]
-        valor = p["valor"]
-        origem = p["origem"]
-        qtd = p["qtd_cotas"]
-
-        if valor <= 0:
-            continue
-
-        if p["tipo"] == "criador":
-            desc = f"Prêmio (criador) {bolao_nome} - Concurso {concurso_numero} ({qtd} cotas não vendidas)"
-        else:
-            desc = f"Prêmio {bolao_nome} - Concurso {concurso_numero} ({qtd} cota{'s' if qtd > 1 else ''})"
-
-        existing = supabase.table("transacoes")\
-            .select("id")\
-            .eq("usuario_id", uid)\
-            .eq("origem", origem)\
-            .like_("descricao", f"%Concurso {concurso_numero}%")\
-            .limit(1).execute()
-        if existing.data:
-            ja_creditados.append({"usuario_id": uid, "valor": valor, "tipo": p["tipo"]})
-            continue
-
-        # Garantir que carteira existe antes de creditar
-        carteira_check = supabase.table("carteira").select("id").eq("usuario_id", uid).execute()
-        if not carteira_check.data:
-            supabase.table("carteira").insert({
-                "usuario_id": uid, "saldo_disponivel": 0, "saldo_bloqueado": 0
-            }).execute()
-
-        r = supabase.rpc("creditar_carteira", {
-            "p_usuario_id": uid,
-            "p_valor": valor,
-            "p_origem": origem,
-            "p_referencia_id": bolao_id,
-            "p_descricao": desc,
-        }).execute()
-        if r.error:
-            erros.append({"usuario_id": uid, "valor": valor, "tipo": p["tipo"], "erro": str(r.error)})
-        else:
-            creditados.append({"usuario_id": uid, "valor": valor, "tipo": p["tipo"]})
-
+    jogos_retry = [
+        {"jogo_id": a["jogo_id"], "dezenas": [], "acertos": a["acertos"]}
+        for a in acertos_res.data
+    ]
+    premio_distribuido = await ResultadoService.calcular_e_distribuir_premio(
+        bolao_id, concurso_numero, premiacoes_api, jogos_retry, tipo_bolao
+    )
     return {
-        "premio_total": premio_total,
-        "total_cotas": total_cotas,
-        "total_vendidas": total_vendidas,
-        "creditados": creditados,
-        "ja_creditados": ja_creditados,
-        "erros": erros,
+        "premio_total": round(premio_distribuido, 2),
+        "mensagem": f"Prêmio R$ {premio_distribuido:.2f} distribuído",
     }
