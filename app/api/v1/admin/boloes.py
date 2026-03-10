@@ -1080,6 +1080,13 @@ async def ver_resultado(bolao_id: str):
         if j["acertos"] >= min_acertos_premio:
             resumo[j["acertos"]] = resumo.get(j["acertos"], 0) + 1
 
+    prem_result = supabase.table("premiacoes_bolao")\
+        .select("premio_total")\
+        .eq("bolao_id", bolao_id)\
+        .eq("concurso_numero", bolao["concurso_numero"])\
+        .execute()
+    premio_total_db = float(prem_result.data[0]["premio_total"]) if prem_result.data else 0.0
+
     return {
         "bolao_id": bolao_id,
         "teimosinha": False,
@@ -1087,6 +1094,7 @@ async def ver_resultado(bolao_id: str):
         "resultado_dezenas": resultado_dezenas,
         "jogos_resultado": jogos_resultado,
         "resumo": resumo,
+        "premio_total": premio_total_db,
     }
 
 
