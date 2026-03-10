@@ -1,4 +1,4 @@
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import model_validator
 from typing import List
 
@@ -68,9 +68,7 @@ class Settings(BaseSettings):
         """Converte string de ADMIN_EMAILS em lista"""
         return [e.strip().lower() for e in self.ADMIN_EMAILS.split(",") if e.strip()]
 
-    class Config:
-        env_file = ".env"
-        case_sensitive = True
+    model_config = SettingsConfigDict(env_file=".env", case_sensitive=True)
 
 
 # Instância única das configurações
