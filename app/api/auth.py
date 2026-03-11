@@ -177,6 +177,7 @@ class LoginResponse(BaseModel):
     nome: str
     email: str
     is_admin: bool = False
+    access_token: str = ""
 
 
 @router.post("/login", response_model=LoginResponse)
@@ -288,15 +289,21 @@ async def login_usuario(request: Request, response: Response, body: LoginRequest
         nome=nome,
         email=user_email,
         is_admin=is_admin,
+        access_token=access_token,
     )
 
 
 @router.get("/me")
-async def get_me(auth_token: Optional[str] = Cookie(None)):
+async def get_me(request: Request, auth_token: Optional[str] = Cookie(None)):
     """
-    Retorna dados do usuário autenticado a partir do cookie httpOnly.
+    Retorna dados do usuário autenticado a partir do cookie httpOnly ou Bearer token.
     Usado pelo frontend para restaurar sessão após reload da página.
     """
+    # Aceitar Authorization: Bearer {token} como alternativa ao cookie (mobile/Safari)
+    if not auth_token:
+        auth_header = request.headers.get("Authorization", "")
+        if auth_header.startswith("Bearer "):
+            auth_token = auth_header[7:]
     if not auth_token:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Não autenticado")
     try:
