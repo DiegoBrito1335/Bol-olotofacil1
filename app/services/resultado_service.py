@@ -228,6 +228,13 @@ class ResultadoService:
         # Usar total_cotas do bolão como denominador (cotas não vendidas pertencem ao criador)
         total_cotas = total_cotas_bolao if total_cotas_bolao > 0 else total_cotas_vendidas
 
+        # Validação antifraude: cotas vendidas não podem exceder o total
+        if total_cotas_vendidas > total_cotas:
+            logger.warning(
+                f"Bolão {bolao_id}: cotas vendidas ({total_cotas_vendidas}) > total ({total_cotas}) "
+                f"— usando total_cotas como base para divisão"
+            )
+
         if total_cotas == 0:
             logger.warning(f"Bolão {bolao_id} sem cotas para distribuir prêmio")
             supabase.table("premiacoes_bolao").insert({
@@ -250,14 +257,29 @@ class ResultadoService:
                 "tipo": "criador", "origem": "premiacao_criador"
             })
 
-        # Calcular valores com soma exata = premio_total (ajuste no último para eliminar diferença de arredondamento)
+        # Calcular valor por cota e distribuir proporcionalmente
+        # O último participante recebe o resto para garantir soma exata = premio_total (anti-arredondamento)
+        valor_por_cota = round(premio_total / total_cotas, 10)  # alta precisão interna
         soma_ate_agora = 0.0
         for i, p in enumerate(todos_participantes):
             if i == len(todos_participantes) - 1:
                 p["valor"] = round(premio_total - soma_ate_agora, 2)
             else:
-                p["valor"] = round((p["qtd_cotas"] / total_cotas) * premio_total, 2)
+                p["valor"] = round(p["qtd_cotas"] * valor_por_cota, 2)
                 soma_ate_agora += p["valor"]
+
+        # Verificação antifraude: soma deve ser igual ao prêmio total
+        soma_total = sum(p["valor"] for p in todos_participantes)
+        if abs(soma_total - premio_total) > 0.01:
+            logger.error(
+                f"ANTIFRAUDE: soma distribuída R$ {soma_total:.2f} ≠ prêmio R$ {premio_total:.2f} "
+                f"— bolão {bolao_id} concurso {concurso_numero}"
+            )
+        else:
+            logger.info(
+                f"Verificação OK: R$ {soma_total:.2f} = prêmio R$ {premio_total:.2f} "
+                f"| valor_por_cota=R$ {premio_total/total_cotas:.4f} | {len(todos_participantes)} participante(s)"
+            )
 
         # Creditar cada participante
         has_errors = False

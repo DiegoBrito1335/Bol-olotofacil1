@@ -1123,6 +1123,31 @@ async def ver_resultado(bolao_id: str):
         .execute()
     premio_total_db = float(prem_result.data[0]["premio_total"]) if prem_result.data else 0.0
 
+    # Calcular breakdown completo do prêmio
+    total_cotas_bolao = int(bolao.get("total_cotas", 0))
+    cotas_disponiveis = int(bolao.get("cotas_disponiveis", 0))
+    valor_cota_bolao = float(bolao.get("valor_cota", 0))
+    criador_id = bolao.get("criador_id")
+    cotas_restantes = cotas_disponiveis  # cotas não vendidas = disponíveis
+    cotas_vendidas_count = total_cotas_bolao - cotas_restantes
+    valor_por_cota = round(premio_total_db / total_cotas_bolao, 2) if total_cotas_bolao > 0 and premio_total_db > 0 else 0.0
+
+    # Cotas do admin: compradas por ele + cotas não vendidas
+    cotas_admin_compradas = 0
+    if criador_id and valor_cota_bolao > 0:
+        admin_cotas_res = supabase.table("cotas")\
+            .select("valor_pago")\
+            .eq("bolao_id", bolao_id)\
+            .eq("usuario_id", criador_id)\
+            .execute()
+        if admin_cotas_res.data:
+            cotas_admin_compradas = sum(
+                max(1, round(float(c["valor_pago"]) / valor_cota_bolao))
+                for c in admin_cotas_res.data
+            )
+    cotas_admin_total = cotas_admin_compradas + cotas_restantes
+    valor_admin = round(cotas_admin_total * valor_por_cota, 2)
+
     return {
         "bolao_id": bolao_id,
         "teimosinha": False,
@@ -1131,6 +1156,12 @@ async def ver_resultado(bolao_id: str):
         "jogos_resultado": jogos_resultado,
         "resumo": resumo,
         "premio_total": premio_total_db,
+        "total_cotas": total_cotas_bolao,
+        "cotas_vendidas": cotas_vendidas_count,
+        "cotas_restantes": cotas_restantes,
+        "valor_por_cota": valor_por_cota,
+        "cotas_admin_total": cotas_admin_total,
+        "valor_admin": valor_admin,
     }
 
 

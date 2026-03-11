@@ -155,15 +155,16 @@ async def minhas_cotas(
                 if total_premio > 0:
                     b = boloes_map.get(bid, {})
                     total_cotas = b.get("total_cotas", 0)
-                    cotas_disp = b.get("cotas_disponiveis", 0)
-                    vendidas = total_cotas - cotas_disp
                     user_qtd = cota.get("quantidade", 1)
                     if total_cotas > 0:
                         cota["premio_ganho"] = round(total_premio * user_qtd / total_cotas, 2)
+                        cota["valor_por_cota"] = round(total_premio / total_cotas, 2)
                     else:
                         cota["premio_ganho"] = 0
+                        cota["valor_por_cota"] = 0
                 else:
                     cota["premio_ganho"] = 0
+                    cota["valor_por_cota"] = 0
 
         return cotas_data
 
@@ -330,10 +331,12 @@ async def meus_resultados(
                         if ac in resumo_acertos:
                             resumo_acertos[ac] += 1
 
+                    premio_cn = premiacoes_map.get(bid, {}).get(cn, 0)
                     resultados_list.append({
                         "concurso_numero": cn,
                         "dezenas_sorteadas": sorted(res["dezenas"]),
-                        "premio_total": premiacoes_map.get(bid, {}).get(cn, 0),
+                        "premio_total": premio_cn,
+                        "valor_por_cota": round(premio_cn / total_cotas, 2) if total_cotas > 0 and premio_cn > 0 else 0,
                         "resumo_acertos": resumo_acertos,
                         "jogos": jogos_com_acertos,
                     })
@@ -364,10 +367,12 @@ async def meus_resultados(
                         if acertos in resumo_acertos:
                             resumo_acertos[acertos] += 1
 
+                    premio_cn = premiacoes_map.get(bid, {}).get(cn, 0)
                     resultados_list.append({
                         "concurso_numero": cn,
                         "dezenas_sorteadas": sorted(dezenas_resultado),
-                        "premio_total": premiacoes_map.get(bid, {}).get(cn, 0),
+                        "premio_total": premio_cn,
+                        "valor_por_cota": round(premio_cn / total_cotas, 2) if total_cotas > 0 and premio_cn > 0 else 0,
                         "resumo_acertos": resumo_acertos,
                         "jogos": jogos_com_acertos,
                     })
