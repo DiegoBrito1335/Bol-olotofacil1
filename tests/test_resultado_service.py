@@ -245,10 +245,10 @@ async def test_idempotencia_credito_ja_existente():
 
 
 # ---------------------------------------------------------------------------
-# 6. Erro no RPC → has_errors=True → salva premio_total=0 para retry
+# 6. Erro no RPC → has_errors=True → salva premio_total real (retry via redistribuir-premio)
 # ---------------------------------------------------------------------------
 
-async def test_rpc_error_salva_zero_para_retry():
+async def test_rpc_error_salva_valor_real_para_retry():
     jogos = _jogos([15])
     premiacoes = {15: 500.0}
     cotas_data = [{"usuario_id": "user-a", "valor_pago": 50.0}]
@@ -274,10 +274,10 @@ async def test_rpc_error_salva_zero_para_retry():
 
     # Retorna o premio calculado mesmo com erro
     assert resultado == 500.0
-    # premiacoes_bolao deve ser inserido com premio_total=0 (para retry)
+    # premiacoes_bolao deve ser inserido com o valor real — admin usa redistribuir-premio para retentar
     insert_call = supabase_mock.table("premiacoes_bolao").insert.call_args
     assert insert_call is not None
-    assert insert_call[0][0]["premio_total"] == 0.0
+    assert insert_call[0][0]["premio_total"] == 500.0
 
 
 # ---------------------------------------------------------------------------
