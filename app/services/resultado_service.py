@@ -292,15 +292,15 @@ class ResultadoService:
             if valor <= 0:
                 continue
 
-            # Idempotência: verificar se já foi creditado para este concurso
-            existing = supabase.table("transacoes")\
+            # Idempotência: verificar se já foi distribuído para este usuário/concurso
+            existing = supabase.table("distribuicao_premios")\
                 .select("id")\
+                .eq("bolao_id", bolao_id)\
+                .eq("concurso_numero", concurso_numero)\
                 .eq("usuario_id", usuario_id)\
-                .eq("origem", origem)\
-                .like_("descricao", f"%Concurso {concurso_numero}%")\
                 .limit(1).execute()
             if existing.data:
-                logger.info(f"Crédito concurso {concurso_numero} já existe para {usuario_id} ({origem}) — pulando")
+                logger.info(f"Distribuição concurso {concurso_numero} já registrada para {usuario_id} — pulando")
                 continue
 
             # Garantir que carteira existe antes de creditar
@@ -327,26 +327,39 @@ class ResultadoService:
 
             if rpc_result.error:
                 logger.error(f"Erro no RPC creditar_carteira para {usuario_id} ({origem}): {rpc_result.error}")
-                has_errors = True  # forçar retry automático na próxima execução
+                has_errors = True
             else:
                 logger.info(f"Prêmio R$ {valor} creditado para {usuario_id} ({origem}, concurso {concurso_numero})")
+                # Registrar distribuição para auditoria e idempotência
+                supabase.table("distribuicao_premios").insert({
+                    "bolao_id": bolao_id,
+                    "usuario_id": usuario_id,
+                    "concurso_numero": concurso_numero,
+                    "qtd_cotas": qtd_cotas,
+                    "valor_por_cota": round(valor_por_cota, 4),
+                    "valor_recebido": valor,
+                    "origem": origem,
+                }).execute()
 
         # Registrar premiação — sempre salvar o valor calculado.
-        # Se créditos individuais falharam (has_errors), logar para retry manual via redistribuir-premio.
         if has_errors:
             logger.warning(f"Créditos com falha no bolão {bolao_id} concurso {concurso_numero} — use redistribuir-premio para retentar")
         prem_check = supabase.table("premiacoes_bolao").select("id")\
             .eq("bolao_id", bolao_id).eq("concurso_numero", concurso_numero).execute()
         premio_a_salvar = round(premio_total, 2)
+        prem_update = {"premio_total": premio_a_salvar}
+        if not has_errors:
+            prem_update["distribuido"] = True
         if prem_check.data:
             supabase.table("premiacoes_bolao")\
-                .update({"premio_total": premio_a_salvar})\
+                .update(prem_update)\
                 .eq("bolao_id", bolao_id).eq("concurso_numero", concurso_numero).execute()
         else:
             supabase.table("premiacoes_bolao").insert({
                 "bolao_id": bolao_id,
                 "concurso_numero": concurso_numero,
                 "premio_total": premio_a_salvar,
+                "distribuido": not has_errors,
             }).execute()
 
         logger.info(f"Prêmio total R$ {premio_total:.2f} distribuído para bolão {bolao_id} concurso {concurso_numero}")
