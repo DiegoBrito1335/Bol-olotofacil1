@@ -113,11 +113,13 @@ async def test_distribuicao_normal_compradores():
         {
             "boloes": [FakeQueryResponse(data=[BOLAO_DATA])],
             "cotas": [FakeQueryResponse(data=cotas_data)],
-            # user-a: transacao não existe, carteira existe
-            # user-b: transacao não existe, carteira existe
-            "transacoes": [
-                FakeQueryResponse(data=[], error=None),
-                FakeQueryResponse(data=[], error=None),
+            # user-a: distribuicao não existe, carteira existe; depois insert distribuicao
+            # user-b: distribuicao não existe, carteira existe; depois insert distribuicao
+            "distribuicao_premios": [
+                FakeQueryResponse(data=[], error=None),           # select user-a → não existe
+                FakeQueryResponse(data=[{"id": "d1"}], error=None),  # insert user-a
+                FakeQueryResponse(data=[], error=None),           # select user-b → não existe
+                FakeQueryResponse(data=[{"id": "d2"}], error=None),  # insert user-b
             ],
             "carteira": [
                 FakeQueryResponse(data=[{"id": "c1"}]),
@@ -166,11 +168,12 @@ async def test_cotas_nao_vendidas_vao_para_criador():
         {
             "boloes": [FakeQueryResponse(data=[BOLAO_DATA])],
             "cotas": [FakeQueryResponse(data=cotas_data)],
-            # user-a: transacao, carteira
-            # criador: transacao, carteira
-            "transacoes": [
-                FakeQueryResponse(data=[], error=None),
-                FakeQueryResponse(data=[], error=None),
+            # user-a + criador: distribuicao não existe; depois insert de cada um
+            "distribuicao_premios": [
+                FakeQueryResponse(data=[], error=None),           # select user-a
+                FakeQueryResponse(data=[{"id": "d1"}], error=None),  # insert user-a
+                FakeQueryResponse(data=[], error=None),           # select criador
+                FakeQueryResponse(data=[{"id": "d2"}], error=None),  # insert criador
             ],
             "carteira": [
                 FakeQueryResponse(data=[{"id": "c1"}]),
@@ -212,7 +215,7 @@ async def test_cotas_nao_vendidas_vao_para_criador():
 
 
 # ---------------------------------------------------------------------------
-# 5. Idempotência: crédito já existe → pula RPC
+# 5. Idempotência: distribuição já existe → pula RPC
 # ---------------------------------------------------------------------------
 
 async def test_idempotencia_credito_ja_existente():
@@ -224,8 +227,8 @@ async def test_idempotencia_credito_ja_existente():
         {
             "boloes": [FakeQueryResponse(data=[BOLAO_DATA])],
             "cotas": [FakeQueryResponse(data=cotas_data)],
-            # transacao já existe para user-a
-            "transacoes": [FakeQueryResponse(data=[{"id": "tx1"}], error=None)],
+            # distribuicao já existe para user-a → pula RPC
+            "distribuicao_premios": [FakeQueryResponse(data=[{"id": "d1"}], error=None)],
             "premiacoes_bolao": [
                 FakeQueryResponse(data=None, error=None),
                 FakeQueryResponse(data=[{"id": "p1"}], error=None),
@@ -240,7 +243,7 @@ async def test_idempotencia_credito_ja_existente():
         )
 
     assert resultado == 500.0
-    # RPC NÃO deve ter sido chamado (já creditado)
+    # RPC NÃO deve ter sido chamado (já distribuído)
     assert supabase_mock.rpc.call_count == 0
 
 
@@ -257,7 +260,8 @@ async def test_rpc_error_salva_valor_real_para_retry():
         {
             "boloes": [FakeQueryResponse(data=[BOLAO_DATA])],
             "cotas": [FakeQueryResponse(data=cotas_data)],
-            "transacoes": [FakeQueryResponse(data=[], error=None)],
+            # distribuicao não existe → tenta RPC (que falha) → NÃO insere distribuicao
+            "distribuicao_premios": [FakeQueryResponse(data=[], error=None)],
             "carteira": [FakeQueryResponse(data=[{"id": "c1"}])],
             "premiacoes_bolao": [
                 FakeQueryResponse(data=None, error=None),
@@ -295,7 +299,11 @@ async def test_carteira_inexistente_cria_automaticamente():
         {
             "boloes": [FakeQueryResponse(data=[bolao_sem_criador])],
             "cotas": [FakeQueryResponse(data=cotas_data)],
-            "transacoes": [FakeQueryResponse(data=[], error=None)],
+            # distribuicao não existe → RPC sucesso → insert distribuicao
+            "distribuicao_premios": [
+                FakeQueryResponse(data=[], error=None),               # select → não existe
+                FakeQueryResponse(data=[{"id": "d1"}], error=None),   # insert após RPC
+            ],
             # carteira não existe na primeira consulta
             "carteira": [
                 FakeQueryResponse(data=[], error=None),              # select → vazio
@@ -344,10 +352,14 @@ async def test_soma_exata_arredondamento():
         {
             "boloes": [FakeQueryResponse(data=[bolao_3_cotas])],
             "cotas": [FakeQueryResponse(data=cotas_data)],
-            "transacoes": [
-                FakeQueryResponse(data=[], error=None),
-                FakeQueryResponse(data=[], error=None),
-                FakeQueryResponse(data=[], error=None),
+            # 3 usuários: cada um tem select + insert em distribuicao_premios
+            "distribuicao_premios": [
+                FakeQueryResponse(data=[], error=None),              # select user-a
+                FakeQueryResponse(data=[{"id": "d1"}], error=None),  # insert user-a
+                FakeQueryResponse(data=[], error=None),              # select user-b
+                FakeQueryResponse(data=[{"id": "d2"}], error=None),  # insert user-b
+                FakeQueryResponse(data=[], error=None),              # select user-c
+                FakeQueryResponse(data=[{"id": "d3"}], error=None),  # insert user-c
             ],
             "carteira": [
                 FakeQueryResponse(data=[{"id": "c1"}]),
