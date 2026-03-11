@@ -686,7 +686,26 @@ async def apurar_bolao_manual(bolao_id: str, resultado: ResultadoInput):
         return resultado_apuracao
 
     # Concurso único: apuração normal
+    concurso_manual = bolao["concurso_numero"]
     resultado_apuracao = await ResultadoService.apurar_bolao(bolao_id, resultado.dezenas)
+
+    # Tentar distribuir prêmio via API (se disponível)
+    resultado_completo_api = await ResultadoService.buscar_resultado_completo(concurso_manual, tipo)
+    if resultado_completo_api:
+        premiacoes_api = resultado_completo_api.get("premiacoes", {})
+        if premiacoes_api and any(v > 0 for v in premiacoes_api.values()):
+            acertos_res = supabase.table("acertos_concurso").select("jogo_id, acertos")\
+                .eq("bolao_id", bolao_id).eq("concurso_numero", concurso_manual).execute()
+            jogos_premio = [
+                {"jogo_id": a["jogo_id"], "dezenas": [], "acertos": a["acertos"]}
+                for a in (acertos_res.data or [])
+            ]
+            if jogos_premio:
+                premio = await ResultadoService.calcular_e_distribuir_premio(
+                    bolao_id, concurso_manual, premiacoes_api, jogos_premio, tipo
+                )
+                resultado_apuracao["premio_total"] = round(premio, 2)
+
     return resultado_apuracao
 
 
@@ -761,15 +780,32 @@ async def apurar_bolao_automatico(bolao_id: str):
     # Concurso único: apuração normal
     concurso = bolao["concurso_numero"]
     tipo = bolao.get("tipo") or "lotofacil"
-    resultado_dezenas = await ResultadoService.buscar_resultado_api(concurso, tipo)
+    resultado_completo = await ResultadoService.buscar_resultado_completo(concurso, tipo)
 
-    if not resultado_dezenas:
+    if not resultado_completo:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Resultado do concurso {concurso} ainda não disponível na API"
         )
 
-    resultado_apuracao = await ResultadoService.apurar_bolao(bolao_id, resultado_dezenas)
+    dezenas = resultado_completo.get("dezenas", [])
+    premiacoes = resultado_completo.get("premiacoes", {})
+    resultado_apuracao = await ResultadoService.apurar_bolao(bolao_id, dezenas)
+
+    # Distribuir prêmio imediatamente após apuração
+    if premiacoes and any(v > 0 for v in premiacoes.values()):
+        acertos_res = supabase.table("acertos_concurso").select("jogo_id, acertos")\
+            .eq("bolao_id", bolao_id).eq("concurso_numero", concurso).execute()
+        jogos_premio = [
+            {"jogo_id": a["jogo_id"], "dezenas": [], "acertos": a["acertos"]}
+            for a in (acertos_res.data or [])
+        ]
+        if jogos_premio:
+            premio = await ResultadoService.calcular_e_distribuir_premio(
+                bolao_id, concurso, premiacoes, jogos_premio, tipo
+            )
+            resultado_apuracao["premio_total"] = round(premio, 2)
+
     return resultado_apuracao
 
 

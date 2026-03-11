@@ -158,8 +158,8 @@ async def minhas_cotas(
                     cotas_disp = b.get("cotas_disponiveis", 0)
                     vendidas = total_cotas - cotas_disp
                     user_qtd = cota.get("quantidade", 1)
-                    if vendidas > 0:
-                        cota["premio_ganho"] = round(total_premio * user_qtd / vendidas, 2)
+                    if total_cotas > 0:
+                        cota["premio_ganho"] = round(total_premio * user_qtd / total_cotas, 2)
                     else:
                         cota["premio_ganho"] = 0
                 else:
