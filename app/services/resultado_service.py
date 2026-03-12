@@ -77,7 +77,7 @@ class ResultadoService:
         """
         config = ResultadoService._config_loteria(tipo)
         total_dezenas = config['total_dezenas']
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(verify=False) as client:
             for api in ResultadoService._get_apis(tipo):
                 url = api["url"].format(concurso=concurso_numero)
                 campo = api["campo_dezenas"]
@@ -108,7 +108,7 @@ class ResultadoService:
         total_dezenas = config['total_dezenas']
         faixa_offset = config['faixa_offset']
         min_acertos = config['min_acertos_premio']
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(verify=False) as client:
             for api in ResultadoService._get_apis(tipo):
                 url = api["url"].format(concurso=concurso_numero)
                 campo_dezenas = api["campo_dezenas"]
