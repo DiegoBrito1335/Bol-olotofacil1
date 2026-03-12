@@ -16,30 +16,34 @@ class ResultadoService:
     # APIs Lotofácil em ordem de preferência
     _APIS = [
         {
-            "url": "https://servicebus2.caixa.gov.br/portaldeloterias/api/lotofacil/{concurso}",
+            # API Guidi — hospedagem global, funciona fora do Brasil
+            "url": "https://api.guidi.dev.br/loteria/lotofacil/{concurso}",
             "campo_dezenas": "listaDezenas",
             "campo_premiacoes": "listaRateioPremio",
             "campo_valor": "valorPremio",
         },
         {
-            "url": "https://loteriascaixa-api.herokuapp.com/api/lotofacil/{concurso}",
-            "campo_dezenas": "dezenas",
-            "campo_premiacoes": "premiacoes",
+            # API Caixa oficial — pode bloquear IPs fora do Brasil (403)
+            "url": "https://servicebus2.caixa.gov.br/portaldeloterias/api/lotofacil/{concurso}",
+            "campo_dezenas": "listaDezenas",
+            "campo_premiacoes": "listaRateioPremio",
             "campo_valor": "valorPremio",
         },
     ]
     # APIs Mega-Sena em ordem de preferência
     _APIS_MEGASENA = [
         {
-            "url": "https://servicebus2.caixa.gov.br/portaldeloterias/api/megasena/{concurso}",
+            # API Guidi — hospedagem global, funciona fora do Brasil
+            "url": "https://api.guidi.dev.br/loteria/megasena/{concurso}",
             "campo_dezenas": "listaDezenas",
             "campo_premiacoes": "listaRateioPremio",
             "campo_valor": "valorPremio",
         },
         {
-            "url": "https://loteriascaixa-api.herokuapp.com/api/megasena/{concurso}",
-            "campo_dezenas": "dezenas",
-            "campo_premiacoes": "premiacoes",
+            # API Caixa oficial — pode bloquear IPs fora do Brasil (403)
+            "url": "https://servicebus2.caixa.gov.br/portaldeloterias/api/megasena/{concurso}",
+            "campo_dezenas": "listaDezenas",
+            "campo_premiacoes": "listaRateioPremio",
             "campo_valor": "valorPremio",
         },
     ]
