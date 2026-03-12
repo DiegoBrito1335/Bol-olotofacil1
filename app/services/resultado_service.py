@@ -316,30 +316,49 @@ class ResultadoService:
             else:
                 descricao = f"Prêmio {bolao_nome} - Concurso {concurso_numero} ({qtd_cotas} cota{'s' if qtd_cotas > 1 else ''})"
 
-            # Creditar via RPC atômico (UPDATE carteira + INSERT transacao em uma transação SQL)
-            rpc_result = supabase.rpc("creditar_carteira", {
-                "p_usuario_id": usuario_id,
-                "p_valor": valor,
-                "p_origem": origem,
-                "p_referencia_id": bolao_id,
-                "p_descricao": descricao,
+            # 1. Buscar saldo atual da carteira
+            carteira_atual = supabase.table("carteira").select("saldo_disponivel")\
+                .eq("usuario_id", usuario_id).execute()
+            saldo_ant = float(carteira_atual.data[0]["saldo_disponivel"]) if carteira_atual.data else 0.0
+            saldo_pos = round(saldo_ant + valor, 2)
+
+            # 2. Atualizar saldo na carteira
+            upd = supabase.table("carteira")\
+                .update({"saldo_disponivel": saldo_pos})\
+                .eq("usuario_id", usuario_id).execute()
+
+            if upd.error:
+                logger.error(f"Erro ao atualizar carteira para {usuario_id} ({origem}): {upd.error}")
+                has_errors = True
+                continue
+
+            # 3. Registrar transação no extrato
+            tx = supabase.table("transacoes").insert({
+                "usuario_id": usuario_id,
+                "tipo": "credito",
+                "valor": valor,
+                "origem": origem,
+                "referencia_id": bolao_id,
+                "descricao": descricao,
+                "saldo_anterior": saldo_ant,
+                "saldo_posterior": saldo_pos,
+                "status": "concluido",
             }).execute()
 
-            if rpc_result.error:
-                logger.error(f"Erro no RPC creditar_carteira para {usuario_id} ({origem}): {rpc_result.error}")
-                has_errors = True
-            else:
-                logger.info(f"Prêmio R$ {valor} creditado para {usuario_id} ({origem}, concurso {concurso_numero})")
-                # Registrar distribuição para auditoria e idempotência
-                supabase.table("distribuicao_premios").insert({
-                    "bolao_id": bolao_id,
-                    "usuario_id": usuario_id,
-                    "concurso_numero": concurso_numero,
-                    "qtd_cotas": qtd_cotas,
-                    "valor_por_cota": round(valor_por_cota, 4),
-                    "valor_recebido": valor,
-                    "origem": origem,
-                }).execute()
+            if tx.error:
+                logger.warning(f"Carteira atualizada mas erro ao registrar transação para {usuario_id}: {tx.error}")
+
+            logger.info(f"Prêmio R$ {valor} creditado para {usuario_id} ({origem}, concurso {concurso_numero})")
+            # Registrar distribuição para auditoria e idempotência
+            supabase.table("distribuicao_premios").insert({
+                "bolao_id": bolao_id,
+                "usuario_id": usuario_id,
+                "concurso_numero": concurso_numero,
+                "qtd_cotas": qtd_cotas,
+                "valor_por_cota": round(valor_por_cota, 4),
+                "valor_recebido": valor,
+                "origem": origem,
+            }).execute()
 
         # Registrar premiação — sempre salvar o valor calculado.
         if has_errors:
