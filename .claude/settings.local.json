@@ -2,7 +2,36 @@
   "permissions": {
     "allow": [
       "Bash(tree:*)",
-      "Bash(git init:*)"
+      "Bash(git init:*)",
+      "Bash(dir:*)",
+      "Bash(find:*)",
+      "Bash(powershell.exe -Command \"Select-String -Path ''C:\\\\Users\\\\SAMSUNG\\\\Desktop\\\\bolao-lotofacil-backend\\\\app\\\\api\\\\cotas.py'' -Pattern ''buscar_minhas_cotas|boloes\\\\\\(\\\\*\\\\\\)''\")",
+      "Bash(powershell.exe:*)",
+      "Bash(npm create:*)",
+      "Bash(npm install:*)",
+      "Bash(wmic logicaldisk:*)",
+      "Bash(powershell:*)",
+      "Bash(git add:*)",
+      "WebFetch(domain:loteriascaixa-api.herokuapp.com)",
+      "Bash(python:*)",
+      "Bash(curl:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(npm run build:*)",
+      "WebFetch(domain:api.guidi.dev.br)",
+      "WebFetch(domain:lotofacil.net.br)",
+      "Bash(git rm:*)",
+      "Bash(ls -la \"C:\\\\Users\\\\SAMSUNG\\\\Desktop\\\\bolao-lotofacil-frontend\\\\public\"\" 2>/dev/null || echo \"Public directory listing failed \")",
+      "Bash(npx pwa-assets-generator --preset minimal-2023 public/icon.svg)",
+      "Bash(python3 -c \"import sys,json; data=json.load\\(sys.stdin\\); [print\\(b[''id''], b[''nome'']\\) for b in data if ''MARÇO'' in b.get\\(''nome'',''''\\) or ''março'' in b.get\\(''nome'',''''\\).lower\\(\\) or ''Lotof'' in b.get\\(''nome'',''''\\)]\")",
+      "Bash(python3 -c \"import sys,json; data=json.load\\(sys.stdin\\); print\\(json.dumps\\(data, indent=2, ensure_ascii=False\\)[:2000]\\)\")",
+      "Bash(python3.exe -c \"import sys,json; data=json.load\\(sys.stdin\\); [print\\(b[''id''], ''|'', b[''nome'']\\) for b in \\(data if isinstance\\(data,list\\) else []\\)]\")",
+      "WebFetch(domain:servicebus2.caixa.gov.br)",
+      "WebFetch(domain:aprovavistoamericano.com.br)",
+      "WebFetch(domain:www.boloeslotofacil.com)",
+      "Bash(pip install pytest==8.3.4 pytest-asyncio==0.24.0 --quiet)",
+      "Bash(npm run test:run)",
+      "Bash(gh run view 22903001000 --log-failed)"
     ]
   }
 }

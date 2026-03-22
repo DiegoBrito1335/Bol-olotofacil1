@@ -172,6 +172,11 @@ class LoginRequest(BaseModel):
     senha: str
 
 
+class GoogleLoginRequest(BaseModel):
+    credential: str
+
+
+
 class LoginResponse(BaseModel):
     id: str
     nome: str
@@ -291,6 +296,130 @@ async def login_usuario(request: Request, response: Response, body: LoginRequest
         is_admin=is_admin,
         access_token=access_token,
     )
+
+
+@router.post("/google", response_model=LoginResponse)
+@limiter.limit("10/minute")
+async def login_google(request: Request, response: Response, body: GoogleLoginRequest):
+    """
+    Autentica (ou registra) um usuário via Google ID Token (credential).
+    Envia o id_token para o Supabase Auth validar, e depois sincroniza 
+    as tabelas usuarios e carteira, gerando um JWT da plataforma.
+    """
+    if not body.credential:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Token do Google ausente"
+        )
+
+    # 1. Enviar ID Token do Google para o Supabase
+    auth_url = f"{settings.SUPABASE_URL}/auth/v1/token?grant_type=id_token"
+    auth_headers = {
+        "apikey": settings.SUPABASE_ANON_KEY,
+        "Content-Type": "application/json",
+    }
+    auth_payload = {
+        "provider": "google",
+        "id_token": body.credential,
+    }
+
+    try:
+        auth_response = httpx.post(auth_url, json=auth_payload, headers=auth_headers, timeout=15.0)
+    except Exception as e:
+        logger.error(f"Erro de conexão com Supabase Auth (Google): {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Erro ao conectar com serviço de autenticação"
+        )
+
+    if auth_response.status_code not in (200, 201):
+        logger.error(f"Erro Supabase Auth Google {auth_response.status_code}: {auth_response.text}")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Falha ao autenticar com provedor Google"
+        )
+
+    auth_data = auth_response.json()
+    user = auth_data.get("user", {})
+    usuario_id = user.get("id")
+    user_email = user.get("email")
+
+    if not usuario_id or not user_email:
+        logger.error(f"Supabase não retornou id ou email válido: {auth_data}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Erro ao processar dados do usuário retornados pelo provedor"
+        )
+
+    # Google user metadata -> nome
+    user_metadata = user.get("user_metadata", {})
+    if not user_metadata:
+        user_metadata = user.get("raw_user_meta_data", {})
+    nome_google = user_metadata.get("full_name", user_metadata.get("name", user_email.split("@")[0]))
+
+    # 2. Verificar/Criar na tabela usuarios
+    perfil = supabase.table("usuarios").select("*").eq("id", usuario_id).execute()
+
+    if not perfil.data:
+        # Usuário novo
+        usuario_data = {
+            "id": usuario_id,
+            "nome": nome_google,
+            "telefone": None,
+        }
+        res_usr = supabase.table("usuarios").insert(usuario_data).execute()
+        if res_usr.error:
+            logger.warning(f"Aviso: Erro ao criar perfil Google para {usuario_id}: {res_usr.error}")
+
+        # Criar carteira pra ele
+        carteira_data = {
+            "usuario_id": usuario_id,
+            "saldo_disponivel": 0.0,
+            "saldo_bloqueado": 0.0,
+        }
+        res_cart = supabase.table("carteira").insert(carteira_data).execute()
+        if res_cart.error:
+            logger.warning(f"Aviso: Erro ao criar carteira para {usuario_id}: {res_cart.error}")
+        
+        nome = nome_google
+    else:
+        # Usuário existente
+        row = perfil.data[0] if isinstance(perfil.data, list) else perfil.data
+        nome = row.get("nome", nome_google)
+
+    logger.info(f"Login/Registro [Google] bem-sucedido: {usuario_id} - {user_email}")
+
+    # Processo regular de checar admin e gerar cookie
+    is_admin = user_email.lower() in settings.admin_emails_list
+    if not is_admin:
+        admins_result = supabase.table("admins").select("usuario_id").eq("usuario_id", usuario_id).execute()
+        if admins_result.data:
+            is_admin = True
+
+    access_token = create_access_token(
+        user_id=usuario_id,
+        email=user_email,
+        is_admin=is_admin,
+    )
+    is_prod = settings.ENVIRONMENT == "production"
+    response.set_cookie(
+        key="auth_token",
+        value=access_token,
+        httponly=True,
+        secure=is_prod,
+        samesite="none" if is_prod else "lax",
+        max_age=60 * 60 * 12,
+        path="/",
+    )
+
+    return LoginResponse(
+        id=usuario_id,
+        nome=nome,
+        email=user_email,
+        is_admin=is_admin,
+        access_token=access_token,
+    )
+
 
 
 @router.get("/me")
