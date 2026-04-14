@@ -919,16 +919,27 @@ async def apurar_pendentes(bolao_id: str):
             "novos_apurados": 0,
         }
 
-    # Verificar se tem jogos
+    # Verificar se tem jogos — se não tiver, retornar aviso em vez de erro
     jogos_result = await supabase.table("jogos_bolao").select("id").eq("bolao_id", bolao_id).execute()
     if not jogos_result.data:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Este bolão não possui jogos cadastrados"
-        )
+        logger.warning(f"Bolão {bolao_id}: apurar_pendentes chamado mas sem jogos cadastrados")
+        return {
+            "bolao_id": bolao_id,
+            "mensagem": "Este bolão não possui jogos cadastrados",
+            "novos_apurados": 0,
+            "resultados": [],
+            "erros": ["Nenhum jogo cadastrado neste bolão"],
+        }
 
-    resultado = await ResultadoService.apurar_pendentes(bolao_id)
-    return resultado
+    try:
+        resultado = await ResultadoService.apurar_pendentes(bolao_id)
+        return resultado
+    except Exception as e:
+        logger.error(f"Erro ao apurar pendentes do bolão {bolao_id}: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Erro ao apurar pendentes: {str(e)}"
+        )
 
 
 @router.get("/{bolao_id}/apuracao/status")

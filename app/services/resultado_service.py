@@ -204,9 +204,9 @@ class ResultadoService:
 
         # Buscar dados do bolão (nome, valor_cota, total_cotas e criador_id)
         bolao_result = await supabase.table("boloes").select("nome, valor_cota, total_cotas, criador_id").eq("id", bolao_id).execute()
-        bolao_nome = bolao_result.data[0]["nome"] if bolao_result.data else "Bolão"
-        valor_cota = float(bolao_result.data[0]["valor_cota"]) if bolao_result.data else 0
-        total_cotas_bolao = int(bolao_result.data[0]["total_cotas"]) if bolao_result.data else 0
+        bolao_nome = bolao_result.data[0].get("nome", "Bolão") if bolao_result.data else "Bolão"
+        valor_cota = float(bolao_result.data[0].get("valor_cota") or 0) if bolao_result.data else 0
+        total_cotas_bolao = int(bolao_result.data[0].get("total_cotas") or 0) if bolao_result.data else 0
         criador_id = bolao_result.data[0].get("criador_id") if bolao_result.data else None
 
         # Buscar cotas vendidas com valor_pago
@@ -222,7 +222,7 @@ class ResultadoService:
         for cota in cotas:
             uid = cota["usuario_id"]
             if valor_cota > 0:
-                qtd = max(1, round(float(cota["valor_pago"]) / valor_cota))
+                qtd = max(1, round(float(cota.get("valor_pago") or 0) / valor_cota))
             else:
                 qtd = 1
             cotas_por_usuario[uid] = cotas_por_usuario.get(uid, 0) + qtd
@@ -323,7 +323,7 @@ class ResultadoService:
             # 1. Buscar saldo atual da carteira
             carteira_atual = await supabase.table("carteira").select("saldo_disponivel")\
                 .eq("usuario_id", usuario_id).execute()
-            saldo_ant = float(carteira_atual.data[0]["saldo_disponivel"]) if carteira_atual.data else 0.0
+            saldo_ant = float(carteira_atual.data[0].get("saldo_disponivel") or 0) if carteira_atual.data else 0.0
             saldo_pos = round(saldo_ant + valor, 2)
 
             # 2. Atualizar saldo na carteira
@@ -331,7 +331,7 @@ class ResultadoService:
                 .update({"saldo_disponivel": saldo_pos})\
                 .eq("usuario_id", usuario_id).execute()
 
-            if upd.error:
+            if getattr(upd, 'error', None):
                 logger.error(f"Erro ao atualizar carteira para {usuario_id} ({origem}): {upd.error}")
                 has_errors = True
                 continue
@@ -349,7 +349,7 @@ class ResultadoService:
                 "status": "concluido",
             }).execute()
 
-            if tx.error:
+            if getattr(tx, 'error', None):
                 logger.warning(f"Carteira atualizada mas erro ao registrar transação para {usuario_id}: {tx.error}")
 
             logger.info(f"Prêmio R$ {valor} creditado para {usuario_id} ({origem}, concurso {concurso_numero})")
