@@ -19,7 +19,7 @@ class BolaoService:
             Lista de bolões abertos
         """
         try:
-            response = supabase.table("boloes")\
+            response = await supabase.table("boloes")\
                 .select("*")\
                 .eq("status", "aberto")\
                 .order("created_at", desc=True)\
@@ -47,7 +47,7 @@ class BolaoService:
             Dict com dados do bolão ou None
         """
         try:
-            response = supabase.table("boloes")\
+            response = await supabase.table("boloes")\
                 .select("*")\
                 .eq("id", bolao_id)\
                 .execute()
@@ -78,7 +78,7 @@ class BolaoService:
             Lista de jogos do bolão
         """
         try:
-            response = supabase.table("jogos_bolao")\
+            response = await supabase.table("jogos_bolao")\
                 .select("*")\
                 .eq("bolao_id", bolao_id)\
                 .execute()

@@ -53,20 +53,26 @@ class PagamentoService:
             return False
 
     @staticmethod
-    async def criar_pagamento_pix(usuario_id: str, valor: float, descricao: str) -> Optional[Dict[str, Any]]:
+    async def criar_pagamento_pix(usuario_id: str, valor: float, descricao: str, email: str = None) -> Optional[Dict[str, Any]]:
         """
         Cria um pagamento Pix
 
         MODO DESENVOLVIMENTO: Gera Pix simulado sem chamar Mercado Pago
         MODO PRODUÇÃO: Integra com Mercado Pago real
         """
+        
+        if settings.ENVIRONMENT == "production":
+            if not settings.MERCADOPAGO_ACCESS_TOKEN:
+                logger.error("ERRO CRÍTICO: Tentativa de gerar pagamento em produção sem MERCADOPAGO_ACCESS_TOKEN.")
+                return None
+            return await PagamentoService._criar_pix_mercadopago(usuario_id, valor, descricao, email)
 
         if not settings.MERCADOPAGO_ACCESS_TOKEN or settings.MERCADOPAGO_ENV == "sandbox" or settings.ENVIRONMENT == "development":
             if not settings.MERCADOPAGO_ACCESS_TOKEN:
                 logger.warning("MERCADOPAGO_ACCESS_TOKEN não configurado - usando modo simulado")
             return await PagamentoService._criar_pix_simulado(usuario_id, valor, descricao)
 
-        return await PagamentoService._criar_pix_mercadopago(usuario_id, valor, descricao)
+        return await PagamentoService._criar_pix_mercadopago(usuario_id, valor, descricao, email)
 
     @staticmethod
     async def _criar_pix_simulado(usuario_id: str, valor: float, descricao: str) -> Dict[str, Any]:
@@ -95,7 +101,7 @@ class PagamentoService:
                 "webhook_data": {"mode": "simulated", "note": "Pix simulado para desenvolvimento"}
             }
 
-            result = supabase.table("pagamentos_pix").insert(pagamento_db).execute()
+            result = await supabase.table("pagamentos_pix").insert(pagamento_db).execute()
 
             if result.error:
                 logger.error(f"Erro ao salvar pagamento no banco: {result.error}")
@@ -119,7 +125,7 @@ class PagamentoService:
             return None
 
     @staticmethod
-    async def _criar_pix_mercadopago(usuario_id: str, valor: float, descricao: str) -> Optional[Dict[str, Any]]:
+    async def _criar_pix_mercadopago(usuario_id: str, valor: float, descricao: str, email: str = None) -> Optional[Dict[str, Any]]:
         """
         Cria um Pix REAL no Mercado Pago (produção)
         """
@@ -129,9 +135,9 @@ class PagamentoService:
                 "description": descricao,
                 "payment_method_id": "pix",
                 "payer": {
-                    "email": "test_user@test.com",
-                    "first_name": "Test",
-                    "last_name": "User"
+                    "email": email or "contato@boloeslotofacil.com",
+                    "first_name": "Usuario",
+                    "last_name": "Lotofacil"
                 },
                 "external_reference": usuario_id
             }
@@ -171,7 +177,7 @@ class PagamentoService:
                 "expira_em": expira_em.isoformat()
             }
 
-            result = supabase.table("pagamentos_pix").insert(pagamento_db).execute()
+            result = await supabase.table("pagamentos_pix").insert(pagamento_db).execute()
 
             if result.error:
                 logger.error(f"Erro ao salvar pagamento no banco: {result.error}")
@@ -231,7 +237,7 @@ class PagamentoService:
                 return False
 
             # Busca o registro interno pelo external_id
-            pag_result = supabase.table("pagamentos_pix")\
+            pag_result = await supabase.table("pagamentos_pix")\
                 .select("*")\
                 .eq("external_id", str(payment_id))\
                 .execute()
@@ -256,7 +262,7 @@ class PagamentoService:
                     f"Divergência de valor! Esperado R${valor_registrado}, pago R${valor_pago_mp}. "
                     f"Pagamento {payment_id} suspenso para revisão manual."
                 )
-                supabase.table("pagamentos_pix")\
+                await supabase.table("pagamentos_pix")\
                     .update({"status": "divergencia_valor", "webhook_recebido": True})\
                     .eq("external_id", str(payment_id))\
                     .execute()
@@ -266,7 +272,7 @@ class PagamentoService:
 
             # Lock otimista: só atualiza se status ainda for "pendente"
             # Se outro worker já processou, update retorna lista vazia e abortamos
-            update_pag = supabase.table("pagamentos_pix")\
+            update_pag = await supabase.table("pagamentos_pix")\
                 .update({
                     "status": "pago",
                     "webhook_recebido": True,
@@ -281,7 +287,7 @@ class PagamentoService:
                 return True
 
             # C5 — Creditar via RPC atômico (UPDATE carteira + INSERT transacao em uma transação SQL)
-            rpc_result = supabase.rpc("creditar_carteira", {
+            rpc_result = await supabase.rpc("creditar_carteira", {
                 "p_usuario_id": usuario_id,
                 "p_valor": valor,
                 "p_origem": "pix",
@@ -305,10 +311,14 @@ class PagamentoService:
         """
         APENAS PARA TESTES: Simula confirmação de um pagamento
         """
+        if settings.ENVIRONMENT == "production":
+            logger.error("ERRO CRITICO: Tentativa de simular confirmacao em ambiente de producao.")
+            return False
+            
         try:
             logger.info(f"🧪 Simulando confirmação do pagamento: {external_id}")
 
-            pag_result = supabase.table("pagamentos_pix")\
+            pag_result = await supabase.table("pagamentos_pix")\
                 .select("*")\
                 .eq("external_id", external_id)\
                 .execute()
@@ -328,7 +338,7 @@ class PagamentoService:
             valor = float(pagamento["valor"])
 
             # Lock otimista
-            update_pag = supabase.table("pagamentos_pix")\
+            update_pag = await supabase.table("pagamentos_pix")\
                 .update({
                     "status": "pago",
                     "webhook_recebido": True,
@@ -343,7 +353,7 @@ class PagamentoService:
                 return True
 
             # C5 — Creditar via RPC atômico
-            rpc_result = supabase.rpc("creditar_carteira", {
+            rpc_result = await supabase.rpc("creditar_carteira", {
                 "p_usuario_id": usuario_id,
                 "p_valor": valor,
                 "p_origem": "pix",

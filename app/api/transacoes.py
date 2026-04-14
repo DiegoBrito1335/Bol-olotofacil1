@@ -39,7 +39,7 @@ async def listar_transacoes(
 
         query = query.order("created_at", desc=True).limit(limit)
 
-        response = query.execute()
+        response = await query.execute()
 
         transacoes = []
         for t in (response.data or []):
@@ -76,7 +76,7 @@ async def resumo_transacoes(
     """
 
     try:
-        response = supabase.table("transacoes")\
+        response = await supabase.table("transacoes")\
             .select("tipo, valor, origem")\
             .eq("usuario_id", current_user_id)\
             .execute()

@@ -22,7 +22,7 @@ class SupabaseHTTPClient:
             "Content-Type": "application/json",
             "Prefer": "return=representation"
         }
-        self._client = httpx.Client(
+        self._client = httpx.AsyncClient(
             headers=self.headers,
             timeout=15.0,
         )
@@ -35,21 +35,21 @@ class SupabaseHTTPClient:
         """Chama uma função RPC (Remote Procedure Call) no Supabase"""
         return RPCQuery(self.base_url, function_name, params, self.headers, self._client)
 
-    def get_auth_users(self) -> list:
+    async def get_auth_users(self) -> list:
         """Lista todos os usuários do Supabase Auth (requer service role key)."""
         url = f"{self.base_url}/auth/v1/admin/users?per_page=1000"
         try:
-            r = self._client.get(url)
+            r = await self._client.get(url)
             r.raise_for_status()
             return r.json().get("users", [])
         except Exception as e:
             logger.error(f"Erro ao listar auth users: {e}")
             return []
 
-    def delete_auth_user(self, user_id: str) -> None:
+    async def delete_auth_user(self, user_id: str) -> None:
         """Remove usuário do Supabase Auth (cascata para tabelas vinculadas)."""
         url = f"{self.base_url}/auth/v1/admin/users/{user_id}"
-        r = self._client.delete(url)
+        r = await self._client.delete(url)
         r.raise_for_status()
 
 class TableQuery:
@@ -57,7 +57,7 @@ class TableQuery:
     Simula o comportamento do cliente Supabase para queries em tabelas.
     """
 
-    def __init__(self, base_url: str, table_name: str, headers: Dict[str, str], client: httpx.Client):
+    def __init__(self, base_url: str, table_name: str, headers: Dict[str, str], client: httpx.AsyncClient):
         self.base_url = base_url
         self.table_name = table_name
         self.headers = dict(headers)
@@ -124,11 +124,11 @@ class TableQuery:
         self._order_by = f"{column}.{direction}"
         return self
     
-    def execute(self):
+    async def execute(self):
         """Executa a query (select, insert, update ou delete)"""
         try:
             if self._operation == "insert":
-                response = self._client.post(self.url, json=self._payload, headers=self.headers)
+                response = await self._client.post(self.url, json=self._payload, headers=self.headers)
                 response.raise_for_status()
                 return QueryResponse(response.json(), None)
 
@@ -137,7 +137,7 @@ class TableQuery:
                 if self._filters:
                     filter_params = "&".join(self._filters)
                     url = f"{url}?{filter_params}"
-                response = self._client.patch(url, json=self._payload, headers=self.headers)
+                response = await self._client.patch(url, json=self._payload, headers=self.headers)
                 response.raise_for_status()
                 return QueryResponse(response.json(), None)
 
@@ -146,7 +146,7 @@ class TableQuery:
                 if self._filters:
                     filter_params = "&".join(self._filters)
                     url = f"{url}?{filter_params}"
-                response = self._client.delete(url, headers=self.headers)
+                response = await self._client.delete(url, headers=self.headers)
                 response.raise_for_status()
                 # DELETE pode retornar lista vazia ou dados
                 try:
@@ -166,7 +166,7 @@ class TableQuery:
                     params["limit"] = self._limit_value
                 if self._order_by:
                     params["order"] = self._order_by
-                response = self._client.get(self.url, headers=self.headers, params=params)
+                response = await self._client.get(self.url, headers=self.headers, params=params)
                 response.raise_for_status()
                 return QueryResponse(response.json(), None)
 
@@ -215,7 +215,7 @@ class RPCQuery:
     Executa chamadas RPC (funções SQL) no Supabase
     """
 
-    def __init__(self, base_url: str, function_name: str, params: dict, headers: dict, client: httpx.Client):
+    def __init__(self, base_url: str, function_name: str, params: dict, headers: dict, client: httpx.AsyncClient):
         self.base_url = base_url
         self.function_name = function_name
         self.params = params
@@ -223,10 +223,10 @@ class RPCQuery:
         self._client = client
         self.url = f"{base_url}/rest/v1/rpc/{function_name}"
 
-    def execute(self):
+    async def execute(self):
         """Executa a função RPC"""
         try:
-            response = self._client.post(self.url, json=self.params, headers=self.headers)
+            response = await self._client.post(self.url, json=self.params, headers=self.headers)
             if not response.is_success:
                 error_body = response.text
                 logger.error(f"RPC {self.function_name} retornou {response.status_code}: {error_body}")

@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Request, BackgroundTasks
 from app.schemas.pagamento import CriarPagamentoPixRequest, PagamentoPixResponse
 from app.services.pagamento_service import PagamentoService
-from app.api.deps import get_current_user_id
+from app.api.deps import get_current_user_id, get_current_user
 from app.core.limiter import limiter
 import logging
 
@@ -13,7 +13,7 @@ router = APIRouter()
 @router.post("/criar-pix", response_model=PagamentoPixResponse)
 async def criar_pagamento_pix(
     request: CriarPagamentoPixRequest,
-    current_user_id: str = Depends(get_current_user_id)
+    current_user: dict = Depends(get_current_user)
 ):
     """
     Cria uma cobrança Pix para adicionar saldo
@@ -32,7 +32,7 @@ async def criar_pagamento_pix(
     Returns:
         Dados do Pix gerado (QR Code, etc)
     """
-    logger.info(f"Gerando Pix - Usuário: {current_user_id}, Valor: R$ {request.valor}")
+    logger.info(f"Gerando Pix - Usuário: {current_user['id']}, Valor: R$ {request.valor}")
     
     # Valida valor mínimo
     if request.valor < 1:
@@ -50,7 +50,8 @@ async def criar_pagamento_pix(
     
     # Cria pagamento
     resultado = await PagamentoService.criar_pagamento_pix(
-        usuario_id=current_user_id,
+        usuario_id=current_user["id"],
+        email=current_user.get("email"),
         valor=float(request.valor),
         descricao=request.descricao
     )
@@ -126,7 +127,7 @@ async def listar_meus_pagamentos(
     
     logger.info(f"Listando pagamentos do usuário: {current_user_id}")
     
-    response = supabase.table("pagamentos_pix")\
+    response = await supabase.table("pagamentos_pix")\
         .select("*")\
         .eq("usuario_id", current_user_id)\
         .order("created_at", desc=True)\

@@ -20,7 +20,7 @@ async def get_stats():
     """
     try:
         # Total de boloes
-        boloes_result = supabase.table("boloes").select("id, status, valor_cota, total_cotas, cotas_disponiveis").execute()
+        boloes_result = await supabase.table("boloes").select("id, status, valor_cota, total_cotas, cotas_disponiveis").execute()
         boloes = boloes_result.data or []
 
         total_boloes = len(boloes)
@@ -29,13 +29,13 @@ async def get_stats():
         boloes_apurados = len([b for b in boloes if b["status"] == "apurado"])
 
         # Total de cotas vendidas e receita
-        cotas_result = supabase.table("cotas").select("id, valor_pago").execute()
+        cotas_result = await supabase.table("cotas").select("id, valor_pago").execute()
         cotas = cotas_result.data or []
         total_cotas_vendidas = len(cotas)
         receita_total = sum(float(c.get("valor_pago", 0)) for c in cotas)
 
         # Total de usuarios (carteiras unicas)
-        carteiras_result = supabase.table("carteira").select("usuario_id, saldo_disponivel").execute()
+        carteiras_result = await supabase.table("carteira").select("usuario_id, saldo_disponivel").execute()
         carteiras = carteiras_result.data or []
         total_usuarios = len(carteiras)
         saldo_total_carteiras = sum(float(c.get("saldo_disponivel", 0)) for c in carteiras)
@@ -66,21 +66,21 @@ async def get_quick_stats():
     """
     try:
         # Boloes abertos
-        boloes_result = supabase.table("boloes").select("id").eq("status", "aberto").execute()
+        boloes_result = await supabase.table("boloes").select("id").eq("status", "aberto").execute()
         boloes_abertos = len(boloes_result.data) if boloes_result.data else 0
 
         # Cotas vendidas (total)
-        cotas_result = supabase.table("cotas").select("id, valor_pago").execute()
+        cotas_result = await supabase.table("cotas").select("id, valor_pago").execute()
         cotas = cotas_result.data or []
         total_cotas = len(cotas)
         receita_total = sum(float(c.get("valor_pago", 0)) for c in cotas)
 
         # Usuarios
-        carteiras_result = supabase.table("carteira").select("usuario_id").execute()
+        carteiras_result = await supabase.table("carteira").select("usuario_id").execute()
         total_usuarios = len(carteiras_result.data) if carteiras_result.data else 0
 
         # Pagamentos pendentes
-        pagamentos_result = supabase.table("pagamentos_pix").select("id").eq("status", "pendente").execute()
+        pagamentos_result = await supabase.table("pagamentos_pix").select("id").eq("status", "pendente").execute()
         pagamentos_pendentes = len(pagamentos_result.data) if pagamentos_result.data else 0
 
         return {
@@ -107,7 +107,7 @@ async def get_revenue_chart():
     """
     try:
         # Buscar todas as cotas com data de criacao
-        cotas_result = supabase.table("cotas").select("valor_pago, created_at").execute()
+        cotas_result = await supabase.table("cotas").select("valor_pago, created_at").execute()
         cotas = cotas_result.data or []
 
         # Agrupar por dia nos ultimos 30 dias
@@ -152,7 +152,7 @@ async def get_recent_activity():
         atividades = []
 
         # Ultimas cotas compradas
-        cotas_result = supabase.table("cotas")\
+        cotas_result = await supabase.table("cotas")\
             .select("id, usuario_id, bolao_id, valor_pago, created_at")\
             .order("created_at", desc=True)\
             .limit(10)\
@@ -164,7 +164,7 @@ async def get_recent_activity():
         bolao_ids = list(set(c["bolao_id"] for c in cotas_list if c.get("bolao_id")))
         bolao_nomes = {}
         if bolao_ids:
-            boloes_result = supabase.table("boloes").select("id, nome").in_("id", bolao_ids).execute()
+            boloes_result = await supabase.table("boloes").select("id, nome").in_("id", bolao_ids).execute()
             for b in (boloes_result.data or []):
                 bolao_nomes[b["id"]] = b["nome"]
 
@@ -180,7 +180,7 @@ async def get_recent_activity():
             })
 
         # Ultimos pagamentos
-        pagamentos_result = supabase.table("pagamentos_pix")\
+        pagamentos_result = await supabase.table("pagamentos_pix")\
             .select("id, usuario_id, valor, status, created_at")\
             .order("created_at", desc=True)\
             .limit(5)\

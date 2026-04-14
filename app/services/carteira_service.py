@@ -22,7 +22,7 @@ class CarteiraService:
             Dict com dados da carteira ou None se não encontrar
         """
         try:
-            response = supabase.table("carteira")\
+            response = await supabase.table("carteira")\
                 .select("*")\
                 .eq("usuario_id", usuario_id)\
                 .execute()

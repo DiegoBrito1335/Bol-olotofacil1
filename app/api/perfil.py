@@ -32,14 +32,14 @@ async def get_perfil(current_user=Depends(get_current_user)):
     """Retorna dados do perfil do usuário."""
 
     # Tentar com chave_pix, fallback sem (coluna pode não existir ainda)
-    result = supabase.table("usuarios")\
+    result = await supabase.table("usuarios")\
         .select("nome, telefone, chave_pix")\
         .eq("id", current_user["id"])\
         .execute()
 
     if result.error:
         # Fallback: buscar sem chave_pix
-        result = supabase.table("usuarios")\
+        result = await supabase.table("usuarios")\
             .select("nome, telefone")\
             .eq("id", current_user["id"])\
             .execute()
@@ -55,7 +55,8 @@ async def get_perfil(current_user=Depends(get_current_user)):
             "apikey": settings.SUPABASE_SERVICE_ROLE_KEY,
             "Authorization": f"Bearer {settings.SUPABASE_SERVICE_ROLE_KEY}",
         }
-        resp = httpx.get(auth_url, headers=auth_headers, timeout=10.0)
+        async with httpx.AsyncClient() as _client:
+            resp = await _client.get(auth_url, headers=auth_headers, timeout=10.0)
         if resp.status_code == 200:
             auth_data = resp.json()
             email = auth_data.get("email", "")
@@ -67,15 +68,15 @@ async def get_perfil(current_user=Depends(get_current_user)):
         # Perfil não existe — auto-criar com dados do Auth
         logger.info(f"Criando perfil ausente para usuário {current_user['id']}")
         nome_inicial = nome_auth or email.split("@")[0] if email else "Usuário"
-        supabase.table("usuarios").insert({
+        await supabase.table("usuarios").insert({
             "id": current_user["id"],
             "nome": nome_inicial,
             "telefone": None,
         }).execute()
         # Garantir que a carteira também existe
-        carteira_check = supabase.table("carteira").select("id").eq("usuario_id", current_user["id"]).execute()
+        carteira_check = await supabase.table("carteira").select("id").eq("usuario_id", current_user["id"]).execute()
         if not carteira_check.data:
-            supabase.table("carteira").insert({
+            await supabase.table("carteira").insert({
                 "usuario_id": current_user["id"],
                 "saldo_disponivel": 0.0,
                 "saldo_bloqueado": 0.0,
@@ -123,7 +124,7 @@ async def update_perfil(
             detail="Nenhum dado para atualizar"
         )
 
-    result = supabase.table("usuarios")\
+    result = await supabase.table("usuarios")\
         .update(update_data)\
         .eq("id", current_user["id"])\
         .execute()

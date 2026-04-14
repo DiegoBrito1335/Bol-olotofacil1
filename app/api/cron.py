@@ -35,7 +35,7 @@ async def cron_apurar_resultados(
         )
 
     # Buscar bolões que não estão apurados nem cancelados
-    boloes_result = supabase.table("boloes")\
+    boloes_result = await supabase.table("boloes")\
         .select("id, nome, concurso_numero, concurso_fim, status, tipo")\
         .in_("status", ["aberto", "fechado"])\
         .execute()
@@ -54,7 +54,7 @@ async def cron_apurar_resultados(
         bolao_id = bolao["id"]
 
         # Verificar se tem jogos
-        jogos_result = supabase.table("jogos_bolao")\
+        jogos_result = await supabase.table("jogos_bolao")\
             .select("id")\
             .eq("bolao_id", bolao_id)\
             .limit(1)\
@@ -98,7 +98,7 @@ async def cron_apurar_resultados(
             })
 
     # Retry: bolões concurso único já apurados com prêmio pendente (premio_total=0)
-    apurados_result = supabase.table("boloes")\
+    apurados_result = await supabase.table("boloes")\
         .select("id, nome, concurso_numero, concurso_fim, tipo")\
         .eq("status", "apurado")\
         .execute()
@@ -108,7 +108,7 @@ async def cron_apurar_resultados(
         bid = bolao["id"]
         concurso = bolao["concurso_numero"]
         tipo = bolao.get("tipo") or "lotofacil"
-        prem = supabase.table("premiacoes_bolao").select("premio_total")\
+        prem = await supabase.table("premiacoes_bolao").select("premio_total")\
             .eq("bolao_id", bid).eq("concurso_numero", concurso).execute()
         if prem.data and float(prem.data[0]["premio_total"]) > 0:
             continue  # prêmio já distribuído
@@ -117,7 +117,7 @@ async def cron_apurar_resultados(
             premiacoes = resultado_completo.get("premiacoes", {}) if resultado_completo else {}
             if not premiacoes or not any(v > 0 for v in premiacoes.values()):
                 continue
-            acertos_res = supabase.table("acertos_concurso").select("jogo_id, acertos")\
+            acertos_res = await supabase.table("acertos_concurso").select("jogo_id, acertos")\
                 .eq("bolao_id", bid).eq("concurso_numero", concurso).execute()
             jogos_retry = [
                 {"jogo_id": a["jogo_id"], "dezenas": [], "acertos": a["acertos"]}
@@ -158,7 +158,7 @@ async def cron_fechar_boloes(
         )
 
     # Buscar todos os bolões abertos
-    boloes_result = supabase.table("boloes")\
+    boloes_result = await supabase.table("boloes")\
         .select("id, nome")\
         .eq("status", "aberto")\
         .execute()
@@ -175,7 +175,7 @@ async def cron_fechar_boloes(
 
     for bolao in boloes:
         try:
-            supabase.table("boloes")\
+            await supabase.table("boloes")\
                 .update({"status": "fechado"})\
                 .eq("id", bolao["id"])\
                 .execute()

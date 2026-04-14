@@ -21,21 +21,21 @@ async def listar_usuarios(current_admin_id: str = Depends(get_admin_user)):
     Lista todos os usuários com perfil, saldo e status de admin.
     """
     # 1. Perfis
-    perfis_result = supabase.table("usuarios").select("id, nome, telefone").execute()
+    perfis_result = await supabase.table("usuarios").select("id, nome, telefone").execute()
     perfis = perfis_result.data or []
     perfil_map = {p["id"]: p for p in perfis}
 
     # 2. Carteiras
-    carteiras_result = supabase.table("carteira").select("usuario_id, saldo_disponivel, saldo_bloqueado").execute()
+    carteiras_result = await supabase.table("carteira").select("usuario_id, saldo_disponivel, saldo_bloqueado").execute()
     carteiras = carteiras_result.data or []
     carteira_map = {c["usuario_id"]: c for c in carteiras}
 
     # 3. Admins dinâmicos (tabela admins)
-    admins_result = supabase.table("admins").select("usuario_id").execute()
+    admins_result = await supabase.table("admins").select("usuario_id").execute()
     admins_ids = {r["usuario_id"] for r in (admins_result.data or [])}
 
     # 4. Emails via Auth Admin API
-    auth_users = supabase.get_auth_users()
+    auth_users = await supabase.get_auth_users()
     email_map = {u["id"]: u.get("email", "") for u in auth_users}
     created_map = {u["id"]: u.get("created_at", "") for u in auth_users}
 
@@ -69,7 +69,7 @@ async def promover_admin(usuario_id: str, current_admin_id: str = Depends(get_ad
     Promove um usuário a administrador.
     """
     # Buscar email do usuário via Auth API
-    auth_users = supabase.get_auth_users()
+    auth_users = await supabase.get_auth_users()
     usuario = next((u for u in auth_users if u["id"] == usuario_id), None)
 
     if not usuario:
@@ -81,11 +81,11 @@ async def promover_admin(usuario_id: str, current_admin_id: str = Depends(get_ad
     email = usuario.get("email", "")
 
     # Verificar se já é admin
-    existing = supabase.table("admins").select("usuario_id").eq("usuario_id", usuario_id).execute()
+    existing = await supabase.table("admins").select("usuario_id").eq("usuario_id", usuario_id).execute()
     if existing.data:
         return {"mensagem": "Usuário já é administrador"}
 
-    result = supabase.table("admins").insert({
+    result = await supabase.table("admins").insert({
         "usuario_id": usuario_id,
         "email": email,
     }).execute()
@@ -111,7 +111,7 @@ async def rebaixar_admin(usuario_id: str, current_admin_id: str = Depends(get_ad
             detail="Você não pode remover seu próprio acesso de admin"
         )
 
-    result = supabase.table("admins").delete().eq("usuario_id", usuario_id).execute()
+    result = await supabase.table("admins").delete().eq("usuario_id", usuario_id).execute()
 
     if result.error:
         raise HTTPException(
@@ -136,7 +136,7 @@ async def remover_usuario(usuario_id: str, current_admin_id: str = Depends(get_a
         )
 
     # Verificar cotas
-    cotas = supabase.table("cotas").select("id").eq("usuario_id", usuario_id).limit(1).execute()
+    cotas = await supabase.table("cotas").select("id").eq("usuario_id", usuario_id).limit(1).execute()
     if cotas.data:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -144,17 +144,17 @@ async def remover_usuario(usuario_id: str, current_admin_id: str = Depends(get_a
         )
 
     # Remover da tabela admins (se for admin)
-    supabase.table("admins").delete().eq("usuario_id", usuario_id).execute()
+    await supabase.table("admins").delete().eq("usuario_id", usuario_id).execute()
 
     # Remover da tabela usuarios (perfil)
-    supabase.table("usuarios").delete().eq("id", usuario_id).execute()
+    await supabase.table("usuarios").delete().eq("id", usuario_id).execute()
 
     # Remover carteira
-    supabase.table("carteira").delete().eq("usuario_id", usuario_id).execute()
+    await supabase.table("carteira").delete().eq("usuario_id", usuario_id).execute()
 
     # Remover conta do Supabase Auth
     try:
-        supabase.delete_auth_user(usuario_id)
+        await supabase.delete_auth_user(usuario_id)
     except Exception as e:
         logger.error(f"Erro ao deletar auth user {usuario_id}: {e}")
         raise HTTPException(

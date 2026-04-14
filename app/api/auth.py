@@ -55,10 +55,10 @@ async def registrar_usuario(request: Request, body: RegistroRequest):
             detail="E-mail é obrigatório"
         )
 
-    if not body.senha or len(body.senha) < 6:
+    if not body.senha or len(body.senha) < 8:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Senha deve ter no mínimo 6 caracteres"
+            detail="Senha deve ter no mínimo 8 caracteres"
         )
 
     # 1. Criar usuário via Supabase Auth signup (envia email de confirmação automaticamente)
@@ -75,7 +75,9 @@ async def registrar_usuario(request: Request, body: RegistroRequest):
     }
 
     try:
-        auth_response = httpx.post(auth_url, json=auth_payload, headers=auth_headers, timeout=15.0)
+        async with httpx.AsyncClient() as _client:
+
+            auth_response = await _client.post(auth_url, json=auth_payload, headers=auth_headers, timeout=15.0)
     except Exception as e:
         logger.error(f"Erro de conexão com Supabase Auth: {e}")
         raise HTTPException(
@@ -137,7 +139,7 @@ async def registrar_usuario(request: Request, body: RegistroRequest):
         "telefone": body.telefone,
     }
 
-    result = supabase.table("usuarios").insert(usuario_data).execute()
+    result = await supabase.table("usuarios").insert(usuario_data).execute()
 
     if result.error:
         logger.warning(f"Aviso: Erro ao criar perfil para {usuario_id}: {result.error}")
@@ -149,7 +151,7 @@ async def registrar_usuario(request: Request, body: RegistroRequest):
         "saldo_bloqueado": 0.0,
     }
 
-    cart_result = supabase.table("carteira").insert(carteira_data).execute()
+    cart_result = await supabase.table("carteira").insert(carteira_data).execute()
 
     if cart_result.error:
         logger.warning(f"Aviso: Erro ao criar carteira para {usuario_id}: {cart_result.error}")
@@ -182,7 +184,6 @@ class LoginResponse(BaseModel):
     nome: str
     email: str
     is_admin: bool = False
-    access_token: str = ""
 
 
 @router.post("/login", response_model=LoginResponse)
@@ -218,7 +219,9 @@ async def login_usuario(request: Request, response: Response, body: LoginRequest
     }
 
     try:
-        auth_response = httpx.post(auth_url, json=auth_payload, headers=auth_headers, timeout=15.0)
+        async with httpx.AsyncClient() as _client:
+
+            auth_response = await _client.post(auth_url, json=auth_payload, headers=auth_headers, timeout=15.0)
     except Exception as e:
         logger.error(f"Erro de conexão com Supabase Auth: {e}")
         raise HTTPException(
@@ -256,7 +259,7 @@ async def login_usuario(request: Request, response: Response, body: LoginRequest
     user_email = user.get("email", body.email)
 
     # Buscar nome do perfil
-    perfil = supabase.table("usuarios").select("nome").eq("id", usuario_id).execute()
+    perfil = await supabase.table("usuarios").select("nome").eq("id", usuario_id).execute()
     nome = ""
     if perfil.data:
         row = perfil.data[0] if isinstance(perfil.data, list) else perfil.data
@@ -268,7 +271,7 @@ async def login_usuario(request: Request, response: Response, body: LoginRequest
 
     # Checar tabela admins (admins dinâmicos promovidos via painel)
     if not is_admin:
-        admins_result = supabase.table("admins").select("usuario_id").eq("usuario_id", usuario_id).execute()
+        admins_result = await supabase.table("admins").select("usuario_id").eq("usuario_id", usuario_id).execute()
         if admins_result.data:
             is_admin = True
 
@@ -294,7 +297,6 @@ async def login_usuario(request: Request, response: Response, body: LoginRequest
         nome=nome,
         email=user_email,
         is_admin=is_admin,
-        access_token=access_token,
     )
 
 
@@ -324,7 +326,9 @@ async def login_google(request: Request, response: Response, body: GoogleLoginRe
     }
 
     try:
-        auth_response = httpx.post(auth_url, json=auth_payload, headers=auth_headers, timeout=15.0)
+        async with httpx.AsyncClient() as _client:
+
+            auth_response = await _client.post(auth_url, json=auth_payload, headers=auth_headers, timeout=15.0)
     except Exception as e:
         logger.error(f"Erro de conexão com Supabase Auth (Google): {e}")
         raise HTTPException(
@@ -358,7 +362,7 @@ async def login_google(request: Request, response: Response, body: GoogleLoginRe
     nome_google = user_metadata.get("full_name", user_metadata.get("name", user_email.split("@")[0]))
 
     # 2. Verificar/Criar na tabela usuarios
-    perfil = supabase.table("usuarios").select("*").eq("id", usuario_id).execute()
+    perfil = await supabase.table("usuarios").select("*").eq("id", usuario_id).execute()
 
     if not perfil.data:
         # Usuário novo
@@ -367,7 +371,7 @@ async def login_google(request: Request, response: Response, body: GoogleLoginRe
             "nome": nome_google,
             "telefone": None,
         }
-        res_usr = supabase.table("usuarios").insert(usuario_data).execute()
+        res_usr = await supabase.table("usuarios").insert(usuario_data).execute()
         if res_usr.error:
             logger.warning(f"Aviso: Erro ao criar perfil Google para {usuario_id}: {res_usr.error}")
 
@@ -377,7 +381,7 @@ async def login_google(request: Request, response: Response, body: GoogleLoginRe
             "saldo_disponivel": 0.0,
             "saldo_bloqueado": 0.0,
         }
-        res_cart = supabase.table("carteira").insert(carteira_data).execute()
+        res_cart = await supabase.table("carteira").insert(carteira_data).execute()
         if res_cart.error:
             logger.warning(f"Aviso: Erro ao criar carteira para {usuario_id}: {res_cart.error}")
         
@@ -392,7 +396,7 @@ async def login_google(request: Request, response: Response, body: GoogleLoginRe
     # Processo regular de checar admin e gerar cookie
     is_admin = user_email.lower() in settings.admin_emails_list
     if not is_admin:
-        admins_result = supabase.table("admins").select("usuario_id").eq("usuario_id", usuario_id).execute()
+        admins_result = await supabase.table("admins").select("usuario_id").eq("usuario_id", usuario_id).execute()
         if admins_result.data:
             is_admin = True
 
@@ -417,7 +421,6 @@ async def login_google(request: Request, response: Response, body: GoogleLoginRe
         nome=nome,
         email=user_email,
         is_admin=is_admin,
-        access_token=access_token,
     )
 
 
@@ -440,7 +443,7 @@ async def get_me(request: Request, auth_token: Optional[str] = Cookie(None)):
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(e))
     user_id = payload.get("sub")
-    perfil = supabase.table("usuarios").select("nome").eq("id", user_id).execute()
+    perfil = await supabase.table("usuarios").select("nome").eq("id", user_id).execute()
     nome = (perfil.data[0].get("nome") or "") if perfil.data else ""
     return {
         "id": user_id,
@@ -497,7 +500,9 @@ async def esqueceu_senha(request: Request, body: ForgotPasswordRequest):
     }
 
     try:
-        httpx.post(auth_url, json=auth_payload, headers=auth_headers, timeout=15.0)
+        async with httpx.AsyncClient() as _client:
+
+            await _client.post(auth_url, json=auth_payload, headers=auth_headers, timeout=15.0)
     except Exception as e:
         logger.error(f"Erro ao enviar email de recuperação: {e}")
 
@@ -515,10 +520,10 @@ async def redefinir_senha(request: ResetPasswordRequest):
     Redefine a senha usando o access_token recebido no email de recuperação.
     """
 
-    if not request.nova_senha or len(request.nova_senha) < 6:
+    if not request.nova_senha or len(request.nova_senha) < 8:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="A nova senha deve ter no mínimo 6 caracteres"
+            detail="A nova senha deve ter no mínimo 8 caracteres"
         )
 
     auth_url = f"{settings.SUPABASE_URL}/auth/v1/user"
@@ -530,7 +535,9 @@ async def redefinir_senha(request: ResetPasswordRequest):
     auth_payload = {"password": request.nova_senha}
 
     try:
-        auth_response = httpx.put(auth_url, json=auth_payload, headers=auth_headers, timeout=15.0)
+        async with httpx.AsyncClient() as _client:
+
+            auth_response = await _client.put(auth_url, json=auth_payload, headers=auth_headers, timeout=15.0)
     except Exception as e:
         logger.error(f"Erro ao redefinir senha: {e}")
         raise HTTPException(

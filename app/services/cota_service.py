@@ -36,7 +36,7 @@ class CotaService:
             logger.info(f"Iniciando compra de cota - Usuário: {usuario_id}, Bolão: {bolao_id}")
             
             # Chama a função SQL comprar_cota via RPC
-            response = supabase.rpc(
+            response = await supabase.rpc(
                 'comprar_cota',
                 {
                     'p_usuario_id': usuario_id,
@@ -83,7 +83,7 @@ class CotaService:
             Lista de cotas do usuário
         """
         try:
-            response = supabase.table("cotas")\
+            response = await supabase.table("cotas")\
                 .select("*, boloes(*)")\
                 .eq("usuario_id", usuario_id)\
                 .order("created_at", desc=True)\

@@ -55,9 +55,9 @@ app = FastAPI(
     title="Bolão Lotofácil API",
     description="Backend da plataforma de bolões da Lotofácil",
     version="1.0.0",
-    docs_url="/docs",
-    redoc_url="/redoc",
-    redirect_slashes=False
+    docs_url="/docs" if settings.ENVIRONMENT != "production" else None,
+    redoc_url="/redoc" if settings.ENVIRONMENT != "production" else None,
+    redirect_slashes=True
 )
 
 # Registrar rate limiter

@@ -40,7 +40,7 @@ async def listar_boloes_disponiveis(
     if limit:
         query = query.limit(limit)
     
-    result = query.execute()
+    result = await query.execute()
     
     if result.error:
         raise HTTPException(
@@ -64,7 +64,7 @@ async def ver_detalhes_bolao(bolao_id: str):
     Ver detalhes de um bolão específico.
     """
     
-    result = supabase.table("boloes").select("*").eq("id", bolao_id).execute()
+    result = await supabase.table("boloes").select("*").eq("id", bolao_id).execute()
     
     if result.error:
         raise HTTPException(
@@ -94,7 +94,7 @@ async def ver_jogos_bolao(bolao_id: str):
     """
     
     # Verificar se bolão existe
-    bolao_result = supabase.table("boloes").select("id, status").eq("id", bolao_id).execute()
+    bolao_result = await supabase.table("boloes").select("id, status").eq("id", bolao_id).execute()
     
     if bolao_result.error or not bolao_result.data:
         raise HTTPException(
@@ -103,7 +103,7 @@ async def ver_jogos_bolao(bolao_id: str):
         )
     
     # Buscar jogos
-    jogos_result = supabase.table("jogos_bolao").select("*").eq("bolao_id", bolao_id).execute()
+    jogos_result = await supabase.table("jogos_bolao").select("*").eq("bolao_id", bolao_id).execute()
     
     if jogos_result.error:
         raise HTTPException(
@@ -129,7 +129,7 @@ async def criar_bolao_via_public(bolao_data: BolaoCreateAdmin):
     """
 
     # Verificar se ja existe bolao com mesmo concurso aberto
-    existing = supabase.table("boloes")\
+    existing = await supabase.table("boloes")\
         .select("id")\
         .eq("concurso_numero", bolao_data.concurso_numero)\
         .eq("status", "aberto")\
@@ -152,7 +152,7 @@ async def criar_bolao_via_public(bolao_data: BolaoCreateAdmin):
         "data_fechamento": bolao_data.data_fechamento.isoformat() if bolao_data.data_fechamento else None
     }
 
-    result = supabase.table("boloes").insert(bolao_dict).execute()
+    result = await supabase.table("boloes").insert(bolao_dict).execute()
 
     if result.error:
         raise HTTPException(
@@ -179,7 +179,7 @@ async def ver_resultado_publico(bolao_id: str):
     Ver resultado e premiação de um bolão (público).
     Retorna resultado por concurso com prêmio distribuído.
     """
-    bolao_result = supabase.table("boloes").select("*").eq("id", bolao_id).execute()
+    bolao_result = await supabase.table("boloes").select("*").eq("id", bolao_id).execute()
 
     if not bolao_result.data:
         raise HTTPException(
@@ -192,14 +192,14 @@ async def ver_resultado_publico(bolao_id: str):
 
     if is_teimosinha:
         # Buscar resultados por concurso
-        resultados_result = supabase.table("resultados_concurso")\
+        resultados_result = await supabase.table("resultados_concurso")\
             .select("concurso_numero, dezenas")\
             .eq("bolao_id", bolao_id)\
             .order("concurso_numero")\
             .execute()
 
         # Buscar premiações
-        premiacoes_result = supabase.table("premiacoes_bolao")\
+        premiacoes_result = await supabase.table("premiacoes_bolao")\
             .select("concurso_numero, premio_total")\
             .eq("bolao_id", bolao_id)\
             .execute()
@@ -227,7 +227,7 @@ async def ver_resultado_publico(bolao_id: str):
         }
 
     # Concurso único — buscar dezenas de resultados_concurso
-    res_concurso = supabase.table("resultados_concurso")\
+    res_concurso = await supabase.table("resultados_concurso")\
         .select("dezenas")\
         .eq("bolao_id", bolao_id)\
         .eq("concurso_numero", bolao["concurso_numero"])\
@@ -242,7 +242,7 @@ async def ver_resultado_publico(bolao_id: str):
     resultado_dezenas = res_concurso.data[0]["dezenas"]
 
     # Buscar premiação
-    premiacoes_result = supabase.table("premiacoes_bolao")\
+    premiacoes_result = await supabase.table("premiacoes_bolao")\
         .select("premio_total")\
         .eq("bolao_id", bolao_id)\
         .eq("concurso_numero", bolao["concurso_numero"])\
@@ -268,7 +268,7 @@ async def verificar_disponibilidade(bolao_id: str):
     Verifica se um bolão está disponível para compra.
     """
     
-    result = supabase.table("boloes").select("id, status, cotas_disponiveis").eq("id", bolao_id).execute()
+    result = await supabase.table("boloes").select("id, status, cotas_disponiveis").eq("id", bolao_id).execute()
     
     if result.error:
         raise HTTPException(

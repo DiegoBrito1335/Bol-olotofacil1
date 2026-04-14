@@ -52,7 +52,7 @@ async def listar_todos_boloes(
     if limit:
         query = query.limit(limit)
     
-    result = query.execute()
+    result = await query.execute()
     
     if result.error:
         raise HTTPException(
@@ -114,7 +114,7 @@ async def criar_bolao(
     }
     
     # Inserir no banco
-    result = supabase.table("boloes").insert(bolao_dict).execute()
+    result = await supabase.table("boloes").insert(bolao_dict).execute()
     
     if result.error:
         raise HTTPException(
@@ -152,7 +152,7 @@ async def atualizar_bolao(
     """
     
     # Verificar se bolão existe
-    existing = supabase.table("boloes").select("*").eq("id", bolao_id).execute()
+    existing = await supabase.table("boloes").select("*").eq("id", bolao_id).execute()
     
     if existing.error:
         raise HTTPException(
@@ -231,7 +231,7 @@ async def atualizar_bolao(
         )
     
     # Atualizar no banco
-    result = supabase.table("boloes").update(update_dict).eq("id", bolao_id).execute()
+    result = await supabase.table("boloes").update(update_dict).eq("id", bolao_id).execute()
     
     if result.error:
         raise HTTPException(
@@ -275,7 +275,7 @@ async def fechar_bolao(
     """
     
     # Verificar se bolão existe
-    existing = supabase.table("boloes").select("*").eq("id", bolao_id).execute()
+    existing = await supabase.table("boloes").select("*").eq("id", bolao_id).execute()
     
     if existing.error:
         raise HTTPException(
@@ -299,7 +299,7 @@ async def fechar_bolao(
         )
     
     # Fechar o bolão
-    result = supabase.table("boloes")\
+    result = await supabase.table("boloes")\
         .update({"status": "fechado"})\
         .eq("id", bolao_id)\
         .execute()
@@ -330,7 +330,7 @@ async def deletar_bolao(
     """
     
     # Verificar se bolão existe
-    existing = supabase.table("boloes").select("*").eq("id", bolao_id).execute()
+    existing = await supabase.table("boloes").select("*").eq("id", bolao_id).execute()
     
     if existing.error:
         raise HTTPException(
@@ -355,10 +355,10 @@ async def deletar_bolao(
         )
     
     # Deletar jogos primeiro (se existirem)
-    supabase.table("jogos_bolao").delete().eq("bolao_id", bolao_id).execute()
+    await supabase.table("jogos_bolao").delete().eq("bolao_id", bolao_id).execute()
     
     # Deletar o bolão
-    result = supabase.table("boloes").delete().eq("id", bolao_id).execute()
+    result = await supabase.table("boloes").delete().eq("id", bolao_id).execute()
     
     if result.error:
         raise HTTPException(
@@ -382,7 +382,7 @@ async def adicionar_jogos(bolao_id: str, data: JogosCreateBatchAdmin):
     Adiciona um ou mais jogos (dezenas) a um bolão.
     """
     # Verificar se bolão existe
-    existing = supabase.table("boloes").select("id, status, tipo").eq("id", bolao_id).execute()
+    existing = await supabase.table("boloes").select("id, status, tipo").eq("id", bolao_id).execute()
 
     if not existing.data:
         raise HTTPException(
@@ -426,7 +426,7 @@ async def adicionar_jogos(bolao_id: str, data: JogosCreateBatchAdmin):
         for jogo in data.jogos
     ]
 
-    result = supabase.table("jogos_bolao").insert(jogos_insert).execute()
+    result = await supabase.table("jogos_bolao").insert(jogos_insert).execute()
 
     if result.error:
         raise HTTPException(
@@ -444,7 +444,7 @@ async def upload_jogos_csv(bolao_id: str, file: UploadFile = File(...)):
     Formato: um jogo por linha, 15 números separados por vírgula ou ponto-e-vírgula.
     """
     # Verificar bolão
-    existing = supabase.table("boloes").select("id, status, tipo").eq("id", bolao_id).execute()
+    existing = await supabase.table("boloes").select("id, status, tipo").eq("id", bolao_id).execute()
 
     if not existing.data:
         raise HTTPException(
@@ -565,7 +565,7 @@ async def upload_jogos_csv(bolao_id: str, file: UploadFile = File(...)):
         for dezenas in jogos_validos
     ]
 
-    result = supabase.table("jogos_bolao").insert(jogos_insert).execute()
+    result = await supabase.table("jogos_bolao").insert(jogos_insert).execute()
 
     if result.error:
         raise HTTPException(
@@ -585,7 +585,7 @@ async def remover_jogo(bolao_id: str, jogo_id: str):
     Remove um jogo específico de um bolão.
     """
     # Verificar se bolão existe e não está apurado
-    existing = supabase.table("boloes").select("id, status").eq("id", bolao_id).execute()
+    existing = await supabase.table("boloes").select("id, status").eq("id", bolao_id).execute()
 
     if not existing.data:
         raise HTTPException(
@@ -601,7 +601,7 @@ async def remover_jogo(bolao_id: str, jogo_id: str):
             detail="Não é possível remover jogos de um bolão já apurado"
         )
 
-    result = supabase.table("jogos_bolao")\
+    result = await supabase.table("jogos_bolao")\
         .delete()\
         .eq("id", jogo_id)\
         .eq("bolao_id", bolao_id)\
@@ -621,7 +621,7 @@ async def apurar_bolao_manual(bolao_id: str, resultado: ResultadoInput):
     Para teimosinha, informar concurso_numero no body.
     """
     # Verificar bolão
-    existing = supabase.table("boloes").select("*").eq("id", bolao_id).execute()
+    existing = await supabase.table("boloes").select("*").eq("id", bolao_id).execute()
 
     if not existing.data:
         raise HTTPException(
@@ -654,7 +654,7 @@ async def apurar_bolao_manual(bolao_id: str, resultado: ResultadoInput):
         )
 
     # Verificar se tem jogos
-    jogos_result = supabase.table("jogos_bolao").select("id").eq("bolao_id", bolao_id).execute()
+    jogos_result = await supabase.table("jogos_bolao").select("id").eq("bolao_id", bolao_id).execute()
     if not jogos_result.data:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -678,10 +678,10 @@ async def apurar_bolao_manual(bolao_id: str, resultado: ResultadoInput):
 
         # Verificar se todos foram apurados
         total = BolaoService.total_concursos(bolao)
-        bolao_atualizado = supabase.table("boloes").select("concursos_apurados").eq("id", bolao_id).execute()
+        bolao_atualizado = await supabase.table("boloes").select("concursos_apurados").eq("id", bolao_id).execute()
         apurados = bolao_atualizado.data[0]["concursos_apurados"] if bolao_atualizado.data else 0
         if apurados >= total:
-            supabase.table("boloes").update({"status": "apurado"}).eq("id", bolao_id).execute()
+            await supabase.table("boloes").update({"status": "apurado"}).eq("id", bolao_id).execute()
 
         return resultado_apuracao
 
@@ -694,7 +694,7 @@ async def apurar_bolao_manual(bolao_id: str, resultado: ResultadoInput):
     if resultado_completo_api:
         premiacoes_api = resultado_completo_api.get("premiacoes", {})
         if premiacoes_api and any(v > 0 for v in premiacoes_api.values()):
-            acertos_res = supabase.table("acertos_concurso").select("jogo_id, acertos")\
+            acertos_res = await supabase.table("acertos_concurso").select("jogo_id, acertos")\
                 .eq("bolao_id", bolao_id).eq("concurso_numero", concurso_manual).execute()
             jogos_premio = [
                 {"jogo_id": a["jogo_id"], "dezenas": [], "acertos": a["acertos"]}
@@ -716,7 +716,7 @@ async def apurar_bolao_automatico(bolao_id: str):
     Para teimosinha, apura todos os concursos de uma vez.
     """
     # Verificar bolão
-    existing = supabase.table("boloes").select("*").eq("id", bolao_id).execute()
+    existing = await supabase.table("boloes").select("*").eq("id", bolao_id).execute()
 
     if not existing.data:
         raise HTTPException(
@@ -742,7 +742,7 @@ async def apurar_bolao_automatico(bolao_id: str):
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Bolão já apurado. Prêmio ainda não disponível na API — tente novamente mais tarde"
             )
-        acertos_res = supabase.table("acertos_concurso").select("jogo_id, acertos")\
+        acertos_res = await supabase.table("acertos_concurso").select("jogo_id, acertos")\
             .eq("bolao_id", bolao_id).eq("concurso_numero", concurso).execute()
         jogos_retry = [
             {"jogo_id": a["jogo_id"], "dezenas": [], "acertos": a["acertos"]}
@@ -763,7 +763,7 @@ async def apurar_bolao_automatico(bolao_id: str):
         }
 
     # Verificar se tem jogos
-    jogos_result = supabase.table("jogos_bolao").select("id").eq("bolao_id", bolao_id).execute()
+    jogos_result = await supabase.table("jogos_bolao").select("id").eq("bolao_id", bolao_id).execute()
     if not jogos_result.data:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -794,7 +794,7 @@ async def apurar_bolao_automatico(bolao_id: str):
 
     # Distribuir prêmio imediatamente após apuração
     if premiacoes and any(v > 0 for v in premiacoes.values()):
-        acertos_res = supabase.table("acertos_concurso").select("jogo_id, acertos")\
+        acertos_res = await supabase.table("acertos_concurso").select("jogo_id, acertos")\
             .eq("bolao_id", bolao_id).eq("concurso_numero", concurso).execute()
         jogos_premio = [
             {"jogo_id": a["jogo_id"], "dezenas": [], "acertos": a["acertos"]}
@@ -816,7 +816,7 @@ async def apurar_concurso_individual(bolao_id: str, concurso_numero: int):
     Busca resultado + premiações e distribui prêmio automaticamente.
     """
     # Verificar bolão
-    existing = supabase.table("boloes").select("*").eq("id", bolao_id).execute()
+    existing = await supabase.table("boloes").select("*").eq("id", bolao_id).execute()
 
     if not existing.data:
         raise HTTPException(
@@ -833,7 +833,7 @@ async def apurar_concurso_individual(bolao_id: str, concurso_numero: int):
         )
 
     # Verificar se tem jogos
-    jogos_result = supabase.table("jogos_bolao").select("id").eq("bolao_id", bolao_id).execute()
+    jogos_result = await supabase.table("jogos_bolao").select("id").eq("bolao_id", bolao_id).execute()
     if not jogos_result.data:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -856,7 +856,7 @@ async def apurar_concurso_individual(bolao_id: str, concurso_numero: int):
             )
 
     # Verificar se já foi apurado
-    ja_apurado = supabase.table("resultados_concurso")\
+    ja_apurado = await supabase.table("resultados_concurso")\
         .select("id")\
         .eq("bolao_id", bolao_id)\
         .eq("concurso_numero", concurso_numero)\
@@ -888,10 +888,10 @@ async def apurar_concurso_individual(bolao_id: str, concurso_numero: int):
     # Verificar se todos foram apurados
     if BolaoService.is_teimosinha(bolao):
         total = BolaoService.total_concursos(bolao)
-        bolao_atualizado = supabase.table("boloes").select("concursos_apurados").eq("id", bolao_id).execute()
+        bolao_atualizado = await supabase.table("boloes").select("concursos_apurados").eq("id", bolao_id).execute()
         apurados = bolao_atualizado.data[0]["concursos_apurados"] if bolao_atualizado.data else 0
         if apurados >= total:
-            supabase.table("boloes").update({"status": "apurado"}).eq("id", bolao_id).execute()
+            await supabase.table("boloes").update({"status": "apurado"}).eq("id", bolao_id).execute()
 
     return resultado
 
@@ -902,7 +902,7 @@ async def apurar_pendentes(bolao_id: str):
     Apura todos os concursos pendentes de um bolão.
     Usado pelo auto-check ao abrir a página e pelo cron.
     """
-    existing = supabase.table("boloes").select("*").eq("id", bolao_id).execute()
+    existing = await supabase.table("boloes").select("*").eq("id", bolao_id).execute()
 
     if not existing.data:
         raise HTTPException(
@@ -920,7 +920,7 @@ async def apurar_pendentes(bolao_id: str):
         }
 
     # Verificar se tem jogos
-    jogos_result = supabase.table("jogos_bolao").select("id").eq("bolao_id", bolao_id).execute()
+    jogos_result = await supabase.table("jogos_bolao").select("id").eq("bolao_id", bolao_id).execute()
     if not jogos_result.data:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -936,7 +936,7 @@ async def status_apuracao(bolao_id: str):
     """
     Retorna o status da apuração de um bolão teimosinha.
     """
-    bolao_result = supabase.table("boloes").select("*").eq("id", bolao_id).execute()
+    bolao_result = await supabase.table("boloes").select("*").eq("id", bolao_id).execute()
 
     if not bolao_result.data:
         raise HTTPException(
@@ -956,14 +956,14 @@ async def status_apuracao(bolao_id: str):
     concursos = BolaoService.concursos_list(bolao)
 
     # Buscar concursos já apurados
-    apurados_result = supabase.table("resultados_concurso")\
+    apurados_result = await supabase.table("resultados_concurso")\
         .select("concurso_numero")\
         .eq("bolao_id", bolao_id)\
         .execute()
     concursos_apurados = {r["concurso_numero"] for r in (apurados_result.data or [])}
 
     # Buscar premiações
-    premiacoes_result = supabase.table("premiacoes_bolao")\
+    premiacoes_result = await supabase.table("premiacoes_bolao")\
         .select("concurso_numero, premio_total")\
         .eq("bolao_id", bolao_id)\
         .execute()
@@ -1005,7 +1005,7 @@ async def ver_resultado(bolao_id: str):
     Para teimosinha, retorna resultados agrupados por concurso.
     """
     # Buscar bolão
-    bolao_result = supabase.table("boloes").select("*").eq("id", bolao_id).execute()
+    bolao_result = await supabase.table("boloes").select("*").eq("id", bolao_id).execute()
 
     if not bolao_result.data:
         raise HTTPException(
@@ -1029,7 +1029,7 @@ async def ver_resultado(bolao_id: str):
             )
 
         # Buscar jogos
-        jogos_result = supabase.table("jogos_bolao").select("*").eq("bolao_id", bolao_id).execute()
+        jogos_result = await supabase.table("jogos_bolao").select("*").eq("bolao_id", bolao_id).execute()
         jogos = jogos_result.data or []
 
         # Buscar acertos por concurso
@@ -1081,7 +1081,7 @@ async def ver_resultado(bolao_id: str):
         }
 
     # Concurso único — buscar dezenas de resultados_concurso
-    res_concurso = supabase.table("resultados_concurso")\
+    res_concurso = await supabase.table("resultados_concurso")\
         .select("dezenas")\
         .eq("bolao_id", bolao_id)\
         .eq("concurso_numero", bolao["concurso_numero"])\
@@ -1095,7 +1095,7 @@ async def ver_resultado(bolao_id: str):
 
     resultado_dezenas = res_concurso.data[0]["dezenas"]
 
-    jogos_result = supabase.table("jogos_bolao")\
+    jogos_result = await supabase.table("jogos_bolao")\
         .select("*")\
         .eq("bolao_id", bolao_id)\
         .execute()
@@ -1116,7 +1116,7 @@ async def ver_resultado(bolao_id: str):
         if j["acertos"] >= min_acertos_premio:
             resumo[j["acertos"]] = resumo.get(j["acertos"], 0) + 1
 
-    prem_result = supabase.table("premiacoes_bolao")\
+    prem_result = await supabase.table("premiacoes_bolao")\
         .select("premio_total")\
         .eq("bolao_id", bolao_id)\
         .eq("concurso_numero", bolao["concurso_numero"])\
@@ -1135,7 +1135,7 @@ async def ver_resultado(bolao_id: str):
     # Cotas do admin: compradas por ele + cotas não vendidas
     cotas_admin_compradas = 0
     if criador_id and valor_cota_bolao > 0:
-        admin_cotas_res = supabase.table("cotas")\
+        admin_cotas_res = await supabase.table("cotas")\
             .select("valor_pago")\
             .eq("bolao_id", bolao_id)\
             .eq("usuario_id", criador_id)\
@@ -1176,7 +1176,7 @@ async def redistribuir_premio(
     Usar quando o crédito automático falhou. Idempotente: pula créditos já realizados.
     """
     # 1. Verificar bolão existe e pegar tipo
-    bolao_check = supabase.table("boloes")\
+    bolao_check = await supabase.table("boloes")\
         .select("tipo")\
         .eq("id", bolao_id)\
         .execute()
@@ -1185,7 +1185,7 @@ async def redistribuir_premio(
     tipo_bolao = bolao_check.data[0].get("tipo") or "lotofacil"
 
     # 2. Verificar premiacoes_bolao
-    prem = supabase.table("premiacoes_bolao")\
+    prem = await supabase.table("premiacoes_bolao")\
         .select("premio_total")\
         .eq("bolao_id", bolao_id)\
         .eq("concurso_numero", concurso_numero)\
@@ -1200,7 +1200,7 @@ async def redistribuir_premio(
     if not premiacoes_api or not any(v > 0 for v in premiacoes_api.values()):
         return {"detail": "API ainda não publicou os valores deste concurso"}
 
-    acertos_res = supabase.table("acertos_concurso")\
+    acertos_res = await supabase.table("acertos_concurso")\
         .select("jogo_id, acertos")\
         .eq("bolao_id", bolao_id)\
         .eq("concurso_numero", concurso_numero).execute()

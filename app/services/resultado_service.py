@@ -192,10 +192,10 @@ class ResultadoService:
         if premio_total <= 0:
             # Se há jogos premiáveis mas premio=0 → API ainda não atualizou os valores
             # Salvar registro com premio_total=0 para rastrear (retry automático tenta novamente)
-            prem_zero = supabase.table("premiacoes_bolao").select("id")\
+            prem_zero = await supabase.table("premiacoes_bolao").select("id")\
                 .eq("bolao_id", bolao_id).eq("concurso_numero", concurso_numero).execute()
             if not prem_zero.data:
-                supabase.table("premiacoes_bolao").insert({
+                await supabase.table("premiacoes_bolao").insert({
                     "bolao_id": bolao_id,
                     "concurso_numero": concurso_numero,
                     "premio_total": 0,
@@ -203,14 +203,14 @@ class ResultadoService:
             return 0.0
 
         # Buscar dados do bolão (nome, valor_cota, total_cotas e criador_id)
-        bolao_result = supabase.table("boloes").select("nome, valor_cota, total_cotas, criador_id").eq("id", bolao_id).execute()
+        bolao_result = await supabase.table("boloes").select("nome, valor_cota, total_cotas, criador_id").eq("id", bolao_id).execute()
         bolao_nome = bolao_result.data[0]["nome"] if bolao_result.data else "Bolão"
         valor_cota = float(bolao_result.data[0]["valor_cota"]) if bolao_result.data else 0
         total_cotas_bolao = int(bolao_result.data[0]["total_cotas"]) if bolao_result.data else 0
         criador_id = bolao_result.data[0].get("criador_id") if bolao_result.data else None
 
         # Buscar cotas vendidas com valor_pago
-        cotas_result = supabase.table("cotas")\
+        cotas_result = await supabase.table("cotas")\
             .select("usuario_id, valor_pago")\
             .eq("bolao_id", bolao_id)\
             .execute()
@@ -241,7 +241,7 @@ class ResultadoService:
 
         if total_cotas == 0:
             logger.warning(f"Bolão {bolao_id} sem cotas para distribuir prêmio")
-            supabase.table("premiacoes_bolao").insert({
+            await supabase.table("premiacoes_bolao").insert({
                 "bolao_id": bolao_id,
                 "concurso_numero": concurso_numero,
                 "premio_total": round(premio_total, 2),
@@ -297,7 +297,7 @@ class ResultadoService:
                 continue
 
             # Idempotência: verificar se já foi distribuído para este usuário/concurso
-            existing = supabase.table("distribuicao_premios")\
+            existing = await supabase.table("distribuicao_premios")\
                 .select("id")\
                 .eq("bolao_id", bolao_id)\
                 .eq("concurso_numero", concurso_numero)\
@@ -308,9 +308,9 @@ class ResultadoService:
                 continue
 
             # Garantir que carteira existe antes de creditar
-            carteira_check = supabase.table("carteira").select("id").eq("usuario_id", usuario_id).execute()
+            carteira_check = await supabase.table("carteira").select("id").eq("usuario_id", usuario_id).execute()
             if not carteira_check.data:
-                supabase.table("carteira").insert({
+                await supabase.table("carteira").insert({
                     "usuario_id": usuario_id, "saldo_disponivel": 0, "saldo_bloqueado": 0
                 }).execute()
 
@@ -321,13 +321,13 @@ class ResultadoService:
                 descricao = f"Prêmio {bolao_nome} - Concurso {concurso_numero} ({qtd_cotas} cota{'s' if qtd_cotas > 1 else ''})"
 
             # 1. Buscar saldo atual da carteira
-            carteira_atual = supabase.table("carteira").select("saldo_disponivel")\
+            carteira_atual = await supabase.table("carteira").select("saldo_disponivel")\
                 .eq("usuario_id", usuario_id).execute()
             saldo_ant = float(carteira_atual.data[0]["saldo_disponivel"]) if carteira_atual.data else 0.0
             saldo_pos = round(saldo_ant + valor, 2)
 
             # 2. Atualizar saldo na carteira
-            upd = supabase.table("carteira")\
+            upd = await supabase.table("carteira")\
                 .update({"saldo_disponivel": saldo_pos})\
                 .eq("usuario_id", usuario_id).execute()
 
@@ -337,7 +337,7 @@ class ResultadoService:
                 continue
 
             # 3. Registrar transação no extrato
-            tx = supabase.table("transacoes").insert({
+            tx = await supabase.table("transacoes").insert({
                 "usuario_id": usuario_id,
                 "tipo": "credito",
                 "valor": valor,
@@ -354,7 +354,7 @@ class ResultadoService:
 
             logger.info(f"Prêmio R$ {valor} creditado para {usuario_id} ({origem}, concurso {concurso_numero})")
             # Registrar distribuição para auditoria e idempotência
-            supabase.table("distribuicao_premios").insert({
+            await supabase.table("distribuicao_premios").insert({
                 "bolao_id": bolao_id,
                 "usuario_id": usuario_id,
                 "concurso_numero": concurso_numero,
@@ -367,18 +367,18 @@ class ResultadoService:
         # Registrar premiação — sempre salvar o valor calculado.
         if has_errors:
             logger.warning(f"Créditos com falha no bolão {bolao_id} concurso {concurso_numero} — use redistribuir-premio para retentar")
-        prem_check = supabase.table("premiacoes_bolao").select("id")\
+        prem_check = await supabase.table("premiacoes_bolao").select("id")\
             .eq("bolao_id", bolao_id).eq("concurso_numero", concurso_numero).execute()
         premio_a_salvar = round(premio_total, 2)
         prem_update = {"premio_total": premio_a_salvar}
         if not has_errors:
             prem_update["distribuido"] = True
         if prem_check.data:
-            supabase.table("premiacoes_bolao")\
+            await supabase.table("premiacoes_bolao")\
                 .update(prem_update)\
                 .eq("bolao_id", bolao_id).eq("concurso_numero", concurso_numero).execute()
         else:
-            supabase.table("premiacoes_bolao").insert({
+            await supabase.table("premiacoes_bolao").insert({
                 "bolao_id": bolao_id,
                 "concurso_numero": concurso_numero,
                 "premio_total": premio_a_salvar,
@@ -404,7 +404,7 @@ class ResultadoService:
         6. Retorna resumo
         """
         # A2 — Verificar se o bolão já foi apurado antes de prosseguir (lock otimista)
-        bolao_check = supabase.table("boloes").select("status").eq("id", bolao_id).execute()
+        bolao_check = await supabase.table("boloes").select("status").eq("id", bolao_id).execute()
         if bolao_check.data and bolao_check.data[0].get("status") == "apurado":
             logger.warning(f"Bolão {bolao_id} já está apurado — ignorando apuração duplicada")
             return {
@@ -416,7 +416,7 @@ class ResultadoService:
             }
 
         # Buscar jogos do bolão
-        jogos_result = supabase.table("jogos_bolao")\
+        jogos_result = await supabase.table("jogos_bolao")\
             .select("*")\
             .eq("bolao_id", bolao_id)\
             .execute()
@@ -432,7 +432,7 @@ class ResultadoService:
             }
 
         # Buscar concurso_numero e tipo do bolão
-        bolao_result = supabase.table("boloes")\
+        bolao_result = await supabase.table("boloes")\
             .select("concurso_numero, tipo")\
             .eq("id", bolao_id)\
             .execute()
@@ -451,7 +451,7 @@ class ResultadoService:
             )
 
             # Atualizar acertos no banco
-            supabase.table("jogos_bolao")\
+            await supabase.table("jogos_bolao")\
                 .update({"acertos": acertos})\
                 .eq("id", jogo["id"])\
                 .execute()
@@ -466,13 +466,13 @@ class ResultadoService:
                 resumo[acertos] += 1
 
         # Atualizar bolão com status apurado
-        supabase.table("boloes")\
+        await supabase.table("boloes")\
             .update({"status": "apurado"})\
             .eq("id", bolao_id)\
             .execute()
 
         # Inserir em resultados_concurso (consistência com apurar_concurso)
-        supabase.table("resultados_concurso").insert({
+        await supabase.table("resultados_concurso").insert({
             "bolao_id": bolao_id,
             "concurso_numero": concurso,
             "dezenas": resultado_dezenas,
@@ -480,7 +480,7 @@ class ResultadoService:
 
         # Batch insert de acertos por jogo em acertos_concurso (1 request em vez de N)
         if jogos_resultado:
-            supabase.table("acertos_concurso").insert([
+            await supabase.table("acertos_concurso").insert([
                 {
                     "jogo_id": jogo_res["jogo_id"],
                     "bolao_id": bolao_id,
@@ -522,7 +522,7 @@ class ResultadoService:
         6. Distribui prêmio se houver
         """
         # Buscar jogos do bolão
-        jogos_result = supabase.table("jogos_bolao")\
+        jogos_result = await supabase.table("jogos_bolao")\
             .select("*")\
             .eq("bolao_id", bolao_id)\
             .execute()
@@ -530,7 +530,7 @@ class ResultadoService:
         jogos = jogos_result.data or []
 
         # A2 — Salvar resultado do concurso (lock otimista: falha se já existir)
-        resultado_insert = supabase.table("resultados_concurso").insert({
+        resultado_insert = await supabase.table("resultados_concurso").insert({
             "bolao_id": bolao_id,
             "concurso_numero": concurso_numero,
             "dezenas": resultado_dezenas,
@@ -571,7 +571,7 @@ class ResultadoService:
 
         # Batch insert de acertos em acertos_concurso (1 request em vez de N)
         if jogos_resultado:
-            supabase.table("acertos_concurso").insert([
+            await supabase.table("acertos_concurso").insert([
                 {
                     "jogo_id": jogo_res["jogo_id"],
                     "bolao_id": bolao_id,
@@ -582,10 +582,10 @@ class ResultadoService:
             ]).execute()
 
         # Incrementar concursos_apurados (com null safety)
-        bolao_result = supabase.table("boloes").select("concursos_apurados").eq("id", bolao_id).execute()
+        bolao_result = await supabase.table("boloes").select("concursos_apurados").eq("id", bolao_id).execute()
         apurados_atual = (bolao_result.data[0].get("concursos_apurados") or 0) if bolao_result.data else 0
 
-        supabase.table("boloes")\
+        await supabase.table("boloes")\
             .update({"concursos_apurados": apurados_atual + 1})\
             .eq("id", bolao_id)\
             .execute()
@@ -618,7 +618,7 @@ class ResultadoService:
         Busca resultado de cada concurso na API e apura sequencialmente.
         """
         # Buscar bolão
-        bolao_result = supabase.table("boloes").select("*").eq("id", bolao_id).execute()
+        bolao_result = await supabase.table("boloes").select("*").eq("id", bolao_id).execute()
         if not bolao_result.data:
             return {"error": "Bolão não encontrado"}
 
@@ -627,7 +627,7 @@ class ResultadoService:
         concursos = BolaoService.concursos_list(bolao)
 
         # Verificar quais concursos já foram apurados
-        apurados_result = supabase.table("resultados_concurso")\
+        apurados_result = await supabase.table("resultados_concurso")\
             .select("concurso_numero")\
             .eq("bolao_id", bolao_id)\
             .execute()
@@ -661,7 +661,7 @@ class ResultadoService:
 
         # Verificar se todos os concursos foram apurados (conta diretamente na tabela resultados_concurso)
         total_concursos = BolaoService.total_concursos(bolao)
-        apurados_result = supabase.table("resultados_concurso")\
+        apurados_result = await supabase.table("resultados_concurso")\
             .select("concurso_numero")\
             .eq("bolao_id", bolao_id)\
             .execute()
@@ -669,14 +669,14 @@ class ResultadoService:
 
         if apurados >= total_concursos:
             # Todos apurados — mudar status para "apurado"
-            supabase.table("boloes")\
+            await supabase.table("boloes")\
                 .update({"status": "apurado"})\
                 .eq("id", bolao_id)\
                 .execute()
 
         # Re-tentar distribuição de prêmios para concursos com premio_total=0
         # (API estava desatualizada no momento da apuração)
-        premiacoes_dist = supabase.table("premiacoes_bolao")\
+        premiacoes_dist = await supabase.table("premiacoes_bolao")\
             .select("concurso_numero, premio_total")\
             .eq("bolao_id", bolao_id).execute()
         concursos_ok = {
@@ -694,7 +694,7 @@ class ResultadoService:
             if not premiacoes_retry or not any(v > 0 for v in premiacoes_retry.values()):
                 continue  # API ainda retorna 0 — tentará na próxima execução
 
-            acertos_res = supabase.table("acertos_concurso")\
+            acertos_res = await supabase.table("acertos_concurso")\
                 .select("jogo_id, acertos")\
                 .eq("bolao_id", bolao_id)\
                 .eq("concurso_numero", concurso).execute()
@@ -733,7 +733,7 @@ class ResultadoService:
     @staticmethod
     async def get_resultados_teimosinha(bolao_id: str) -> List[Dict]:
         """Retorna todos os resultados por concurso de um bolão teimosinha."""
-        result = supabase.table("resultados_concurso")\
+        result = await supabase.table("resultados_concurso")\
             .select("*")\
             .eq("bolao_id", bolao_id)\
             .order("concurso_numero")\
@@ -743,7 +743,7 @@ class ResultadoService:
     @staticmethod
     async def get_acertos_por_concurso(bolao_id: str) -> List[Dict]:
         """Retorna todos os acertos por jogo por concurso."""
-        result = supabase.table("acertos_concurso")\
+        result = await supabase.table("acertos_concurso")\
             .select("*")\
             .eq("bolao_id", bolao_id)\
             .order("concurso_numero")\
@@ -753,7 +753,7 @@ class ResultadoService:
     @staticmethod
     async def get_premiacoes_bolao(bolao_id: str) -> List[Dict]:
         """Retorna premiações distribuídas por concurso."""
-        result = supabase.table("premiacoes_bolao")\
+        result = await supabase.table("premiacoes_bolao")\
             .select("*")\
             .eq("bolao_id", bolao_id)\
             .order("concurso_numero")\

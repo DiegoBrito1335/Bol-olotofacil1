@@ -43,7 +43,7 @@ async def comprar_cota(
     """
 
     # Chamar funcao do banco que faz compra atomica
-    result = supabase.rpc(
+    result = await supabase.rpc(
         "comprar_cota",
         {
             "p_usuario_id": current_user["id"],
@@ -69,7 +69,7 @@ async def comprar_cota(
 
     # Auto-fechar bolão se todas as cotas foram vendidas
     try:
-        bolao_check = supabase.table("boloes")\
+        bolao_check = await supabase.table("boloes")\
             .select("cotas_disponiveis, status")\
             .eq("id", request.bolao_id)\
             .execute()
@@ -78,7 +78,7 @@ async def comprar_cota(
             if bolao["cotas_disponiveis"] <= 0 and bolao["status"] == "aberto":
                 # M1: .eq("status", "aberto") garante idempotência — se outro processo
                 # já fechou, esta operação não afeta nenhuma linha (sem duplicar fechamento)
-                supabase.table("boloes")\
+                await supabase.table("boloes")\
                     .update({"status": "fechado"})\
                     .eq("id", request.bolao_id)\
                     .eq("status", "aberto")\
@@ -109,7 +109,7 @@ async def minhas_cotas(
     try:
         logger.info(f"Buscando cotas para usuario: {current_user['id']}")
 
-        result = supabase.rpc(
+        result = await supabase.rpc(
             "buscar_minhas_cotas",
             {"p_usuario_id": current_user["id"]}
         ).execute()
@@ -127,7 +127,7 @@ async def minhas_cotas(
         # Enriquecer com quantidade real e prêmios
         if cotas_data:
             bolao_ids = list(set(c["bolao_id"] for c in cotas_data))
-            boloes_result = supabase.table("boloes")\
+            boloes_result = await supabase.table("boloes")\
                 .select("id, valor_cota, total_cotas, cotas_disponiveis")\
                 .in_("id", bolao_ids).execute()
             boloes_map = {b["id"]: b for b in (boloes_result.data or [])}
@@ -139,7 +139,7 @@ async def minhas_cotas(
 
             # Enriquecer com prêmios ganhos por bolão
             # Usar premiacoes_bolao (mais confiável) + proporção do usuário
-            premiacoes_result = supabase.table("premiacoes_bolao")\
+            premiacoes_result = await supabase.table("premiacoes_bolao")\
                 .select("bolao_id, premio_total")\
                 .in_("bolao_id", bolao_ids)\
                 .execute()
@@ -189,7 +189,7 @@ async def meus_resultados(
 
     try:
         # 1. Buscar cotas do usuário
-        cotas_result = supabase.rpc(
+        cotas_result = await supabase.rpc(
             "buscar_minhas_cotas",
             {"p_usuario_id": current_user["id"]}
         ).execute()
@@ -211,7 +211,7 @@ async def meus_resultados(
             return []
 
         # 2. Buscar dados dos bolões (sem resultado_dezenas — coluna não existe)
-        boloes_result = supabase.table("boloes")\
+        boloes_result = await supabase.table("boloes")\
             .select("id, nome, concurso_numero, concurso_fim, status, total_cotas, cotas_disponiveis, valor_cota, tipo")\
             .in_("id", all_bolao_ids)\
             .execute()
@@ -223,7 +223,7 @@ async def meus_resultados(
         # Checar resultados_concurso para bolões que não estão "apurado"
         ids_sem_resultado = [bid for bid in all_bolao_ids if bid not in bolao_ids_com_resultado]
         if ids_sem_resultado:
-            check_result = supabase.table("resultados_concurso")\
+            check_result = await supabase.table("resultados_concurso")\
                 .select("bolao_id")\
                 .in_("bolao_id", ids_sem_resultado)\
                 .limit(100)\
@@ -235,7 +235,7 @@ async def meus_resultados(
             return []
 
         # 3. Buscar jogos de todos os bolões com resultado
-        jogos_result = supabase.table("jogos_bolao")\
+        jogos_result = await supabase.table("jogos_bolao")\
             .select("id, bolao_id, dezenas, acertos")\
             .in_("bolao_id", bolao_ids_com_resultado)\
             .execute()
@@ -246,7 +246,7 @@ async def meus_resultados(
             jogos_por_bolao.setdefault(bid, []).append(j)
 
         # 4. Buscar resultados_concurso (teimosinha)
-        resultados_result = supabase.table("resultados_concurso")\
+        resultados_result = await supabase.table("resultados_concurso")\
             .select("bolao_id, concurso_numero, dezenas")\
             .in_("bolao_id", bolao_ids_com_resultado)\
             .order("concurso_numero")\
@@ -258,7 +258,7 @@ async def meus_resultados(
             resultados_por_bolao.setdefault(bid, []).append(r)
 
         # 5. Buscar acertos_concurso (teimosinha - acertos por jogo por concurso)
-        acertos_result = supabase.table("acertos_concurso")\
+        acertos_result = await supabase.table("acertos_concurso")\
             .select("bolao_id, concurso_numero, jogo_id, acertos")\
             .in_("bolao_id", bolao_ids_com_resultado)\
             .execute()
@@ -271,7 +271,7 @@ async def meus_resultados(
             acertos_map.setdefault(bid, {}).setdefault(cn, {})[jid] = a["acertos"]
 
         # 6. Buscar premiações
-        premiacoes_result = supabase.table("premiacoes_bolao")\
+        premiacoes_result = await supabase.table("premiacoes_bolao")\
             .select("bolao_id, concurso_numero, premio_total")\
             .in_("bolao_id", bolao_ids_com_resultado)\
             .execute()
