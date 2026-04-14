@@ -115,25 +115,12 @@ async def test_distribuicao_normal_compradores():
             "cotas": [FakeQueryResponse(data=cotas_data)],
             # user-a: distribuicao não existe, carteira existe; depois insert distribuicao
             # user-b: distribuicao não existe, carteira existe; depois insert distribuicao
-            "distribuicao_premios": [
-                FakeQueryResponse(data=[], error=None),           # select user-a → não existe
-                FakeQueryResponse(data=[{"id": "d1"}], error=None),  # insert user-a
-                FakeQueryResponse(data=[], error=None),           # select user-b → não existe
-                FakeQueryResponse(data=[{"id": "d2"}], error=None),  # insert user-b
-            ],
-            "carteira": [
-                FakeQueryResponse(data=[{"id": "c1"}]),
-                FakeQueryResponse(data=[{"id": "c2"}]),
-            ],
-            "premiacoes_bolao": [
-                FakeQueryResponse(data=None, error=None),       # select → não existe
-                FakeQueryResponse(data=[{"id": "p1"}], error=None),  # insert
-            ],
+            "distribuicao_premios": [FakeQueryResponse(data=[], error=None)],
+            "carteira": [FakeQueryResponse(data=[{"id": "c_mock", "saldo_disponivel": 0.0}])],
+            "transacoes": [FakeQueryResponse(data=None, error=None)],
+            "premiacoes_bolao": [FakeQueryResponse(data=None, error=None)],
         },
-        rpc_responses=[
-            FakeQueryResponse(data={"saldo": 60.0}, error=None),  # user-a
-            FakeQueryResponse(data={"saldo": 40.0}, error=None),  # user-b
-        ],
+        rpc_responses=[FakeQueryResponse(data=None, error=None)],
     )
 
     with patch("app.services.resultado_service.supabase", supabase_mock):
@@ -142,14 +129,12 @@ async def test_distribuicao_normal_compradores():
         )
 
     assert resultado == 500.0
-    # RPC creditado duas vezes
-    assert supabase_mock.rpc.call_count == 2
 
-    # Verificar valores creditados proporcionalmente:
+    # Verificar valores creditados proporcionalmente inseridos nas transações:
     # user-a: 6/10 × 500 = 300; user-b: 4/10 × 500 = 200
     creditos = [
-        call[0][1]["p_valor"]              # segundo arg posicional = params dict
-        for call in supabase_mock.rpc.call_args_list
+        call[0][0]["valor"]
+        for call in supabase_mock.table("transacoes").insert.call_args_list
     ]
     assert sorted(creditos) == [200.0, 300.0]
 
@@ -169,25 +154,12 @@ async def test_cotas_nao_vendidas_vao_para_criador():
             "boloes": [FakeQueryResponse(data=[BOLAO_DATA])],
             "cotas": [FakeQueryResponse(data=cotas_data)],
             # user-a + criador: distribuicao não existe; depois insert de cada um
-            "distribuicao_premios": [
-                FakeQueryResponse(data=[], error=None),           # select user-a
-                FakeQueryResponse(data=[{"id": "d1"}], error=None),  # insert user-a
-                FakeQueryResponse(data=[], error=None),           # select criador
-                FakeQueryResponse(data=[{"id": "d2"}], error=None),  # insert criador
-            ],
-            "carteira": [
-                FakeQueryResponse(data=[{"id": "c1"}]),
-                FakeQueryResponse(data=[{"id": "c2"}]),
-            ],
-            "premiacoes_bolao": [
-                FakeQueryResponse(data=None, error=None),
-                FakeQueryResponse(data=[{"id": "p1"}], error=None),
-            ],
+            "distribuicao_premios": [FakeQueryResponse(data=[], error=None)],
+            "carteira": [FakeQueryResponse(data=[{"id": "c_mock", "saldo_disponivel": 0.0}])],
+            "transacoes": [FakeQueryResponse(data=None, error=None)],
+            "premiacoes_bolao": [FakeQueryResponse(data=None, error=None)],
         },
-        rpc_responses=[
-            FakeQueryResponse(data=None, error=None),
-            FakeQueryResponse(data=None, error=None),
-        ],
+        rpc_responses=[FakeQueryResponse(data=None, error=None)],
     )
 
     with patch("app.services.resultado_service.supabase", supabase_mock):
@@ -196,21 +168,15 @@ async def test_cotas_nao_vendidas_vao_para_criador():
         )
 
     assert resultado == 1000.0
-    # 2 créditos: user-a + criador
-    assert supabase_mock.rpc.call_count == 2
+    
+    transacoes_calls = supabase_mock.table("transacoes").insert.call_args_list
+    assert len(transacoes_calls) == 2
 
-    usuarios_creditados = {
-        call[0][1]["p_usuario_id"]
-        for call in supabase_mock.rpc.call_args_list
-    }
+    usuarios_creditados = {call[0][0]["usuario_id"] for call in transacoes_calls}
     assert "user-a" in usuarios_creditados
     assert "criador-uuid" in usuarios_creditados
 
-    # user-a: 6/10 × 1000 = 600; criador: 4/10 × 1000 = 400
-    creditos = sorted(
-        call[0][1]["p_valor"]
-        for call in supabase_mock.rpc.call_args_list
-    )
+    creditos = sorted(call[0][0]["valor"] for call in transacoes_calls)
     assert creditos == [400.0, 600.0]
 
 
@@ -229,10 +195,9 @@ async def test_idempotencia_credito_ja_existente():
             "cotas": [FakeQueryResponse(data=cotas_data)],
             # distribuicao já existe para user-a → pula RPC
             "distribuicao_premios": [FakeQueryResponse(data=[{"id": "d1"}], error=None)],
-            "premiacoes_bolao": [
-                FakeQueryResponse(data=None, error=None),
-                FakeQueryResponse(data=[{"id": "p1"}], error=None),
-            ],
+            "carteira": [FakeQueryResponse(data=[{"id": "c_mock", "saldo_disponivel": 0.0}])],
+            "transacoes": [FakeQueryResponse(data=None, error=None)],
+            "premiacoes_bolao": [FakeQueryResponse(data=None, error=None)],
         },
         rpc_responses=[FakeQueryResponse(data=None, error=None)],
     )
@@ -243,8 +208,8 @@ async def test_idempotencia_credito_ja_existente():
         )
 
     assert resultado == 500.0
-    # RPC NÃO deve ter sido chamado (já distribuído)
-    assert supabase_mock.rpc.call_count == 0
+    # transação NÃO deve ter sido chamada (já distribuído)
+    assert supabase_mock.table("transacoes").insert.call_count == 0
 
 
 # ---------------------------------------------------------------------------
@@ -262,13 +227,11 @@ async def test_rpc_error_salva_valor_real_para_retry():
             "cotas": [FakeQueryResponse(data=cotas_data)],
             # distribuicao não existe → tenta RPC (que falha) → NÃO insere distribuicao
             "distribuicao_premios": [FakeQueryResponse(data=[], error=None)],
-            "carteira": [FakeQueryResponse(data=[{"id": "c1"}])],
-            "premiacoes_bolao": [
-                FakeQueryResponse(data=None, error=None),
-                FakeQueryResponse(data=[{"id": "p1"}], error=None),
-            ],
+            "carteira": [FakeQueryResponse(data=[{"id": "c1", "saldo_disponivel": 0.0}])],
+            "transacoes": [FakeQueryResponse(data=None, error="DB error: constraint violation")],
+            "premiacoes_bolao": [FakeQueryResponse(data=None, error=None)],
         },
-        rpc_responses=[FakeQueryResponse(data=None, error="DB error: constraint violation")],
+        rpc_responses=[FakeQueryResponse(data=None, error=None)],
     )
 
     with patch("app.services.resultado_service.supabase", supabase_mock):
@@ -300,19 +263,15 @@ async def test_carteira_inexistente_cria_automaticamente():
             "boloes": [FakeQueryResponse(data=[bolao_sem_criador])],
             "cotas": [FakeQueryResponse(data=cotas_data)],
             # distribuicao não existe → RPC sucesso → insert distribuicao
-            "distribuicao_premios": [
-                FakeQueryResponse(data=[], error=None),               # select → não existe
-                FakeQueryResponse(data=[{"id": "d1"}], error=None),   # insert após RPC
-            ],
-            # carteira não existe na primeira consulta
+            "distribuicao_premios": [FakeQueryResponse(data=[], error=None)],
             "carteira": [
-                FakeQueryResponse(data=[], error=None),              # select → vazio
+                FakeQueryResponse(data=[], error=None),              # select -> vazio (carteira_check)
                 FakeQueryResponse(data=[{"id": "new"}], error=None), # insert
+                FakeQueryResponse(data=[], error=None),              # select saldo (carteira_atual data vazio -> usa 0.0 DEFAULT)
+                FakeQueryResponse(data=[{"id": "new"}], error=None), # update
             ],
-            "premiacoes_bolao": [
-                FakeQueryResponse(data=None, error=None),
-                FakeQueryResponse(data=[{"id": "p1"}], error=None),
-            ],
+            "transacoes": [FakeQueryResponse(data=None, error=None)],
+            "premiacoes_bolao": [FakeQueryResponse(data=None, error=None)],
         },
         rpc_responses=[FakeQueryResponse(data=None, error=None)],
     )
@@ -322,11 +281,9 @@ async def test_carteira_inexistente_cria_automaticamente():
             BOLAO_ID, CONCURSO, premiacoes, jogos
         )
 
-    # insert na carteira deve ter sido chamado
-    carteira_inserts = supabase_mock.table("carteira").insert.call_count
-    assert carteira_inserts == 1
-    # RPC creditado normalmente após criar a carteira
-    assert supabase_mock.rpc.call_count == 1
+    # insert na carteira deve ter sido chamado (e outras tabelas tambem incrementam call_count)
+    assert supabase_mock.table("carteira").insert.call_count == 1
+    assert supabase_mock.table("transacoes").insert.call_count == 1
 
 
 # ---------------------------------------------------------------------------
@@ -353,29 +310,12 @@ async def test_soma_exata_arredondamento():
             "boloes": [FakeQueryResponse(data=[bolao_3_cotas])],
             "cotas": [FakeQueryResponse(data=cotas_data)],
             # 3 usuários: cada um tem select + insert em distribuicao_premios
-            "distribuicao_premios": [
-                FakeQueryResponse(data=[], error=None),              # select user-a
-                FakeQueryResponse(data=[{"id": "d1"}], error=None),  # insert user-a
-                FakeQueryResponse(data=[], error=None),              # select user-b
-                FakeQueryResponse(data=[{"id": "d2"}], error=None),  # insert user-b
-                FakeQueryResponse(data=[], error=None),              # select user-c
-                FakeQueryResponse(data=[{"id": "d3"}], error=None),  # insert user-c
-            ],
-            "carteira": [
-                FakeQueryResponse(data=[{"id": "c1"}]),
-                FakeQueryResponse(data=[{"id": "c2"}]),
-                FakeQueryResponse(data=[{"id": "c3"}]),
-            ],
-            "premiacoes_bolao": [
-                FakeQueryResponse(data=None, error=None),
-                FakeQueryResponse(data=[{"id": "p1"}], error=None),
-            ],
+            "distribuicao_premios": [FakeQueryResponse(data=[], error=None)],
+            "carteira": [FakeQueryResponse(data=[{"id": "c_mock", "saldo_disponivel": 0.0}])],
+            "transacoes": [FakeQueryResponse(data=None, error=None)],
+            "premiacoes_bolao": [FakeQueryResponse(data=None, error=None)],
         },
-        rpc_responses=[
-            FakeQueryResponse(data=None, error=None),
-            FakeQueryResponse(data=None, error=None),
-            FakeQueryResponse(data=None, error=None),
-        ],
+        rpc_responses=[FakeQueryResponse(data=None, error=None)],
     )
 
     with patch("app.services.resultado_service.supabase", supabase_mock):
@@ -386,8 +326,8 @@ async def test_soma_exata_arredondamento():
     assert resultado == 100.0
 
     creditos = [
-        call[0][1]["p_valor"]
-        for call in supabase_mock.rpc.call_args_list
+        call[0][0]["valor"]
+        for call in supabase_mock.table("transacoes").insert.call_args_list
     ]
     # Soma exata deve ser R$100,00
     assert round(sum(creditos), 2) == 100.0

@@ -16,7 +16,7 @@ os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-service-role-key")
 os.environ.setdefault("SECRET_KEY", "test-secret-key-for-unit-tests-only")
 os.environ.setdefault("ENVIRONMENT", "test")
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, AsyncMock
 
 
 class FakeQueryResponse:
@@ -36,6 +36,8 @@ def make_chain(responses: list):
     mock = MagicMock()
     for method in ("select", "eq", "like_", "limit", "update", "insert", "order"):
         getattr(mock, method).return_value = mock
+    
+    mock.execute = AsyncMock()
     if len(responses) == 1:
         mock.execute.return_value = responses[0]
     else:
@@ -58,6 +60,7 @@ def make_supabase(table_map: dict, rpc_responses: list | None = None):
 
     if rpc_responses is not None:
         rpc_chain = MagicMock()
+        rpc_chain.execute = AsyncMock()
         if len(rpc_responses) == 1:
             rpc_chain.execute.return_value = rpc_responses[0]
         else:
