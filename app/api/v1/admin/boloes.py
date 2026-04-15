@@ -323,10 +323,13 @@ async def fechar_bolao(
 @router.delete("/{bolao_id}")
 async def deletar_bolao(
     bolao_id: str,
+    force: bool = False,
 ):
     """
-    Deleta um bolão (admin).
-    ATENÇÃO: Só pode deletar bolões sem cotas vendidas!
+    Deleta um bolão e TODAS as suas dependências (admin).
+    
+    Query params:
+    - force=true: permite deletar mesmo com cotas vendidas (para testes/reset)
     """
     
     # Verificar se bolão existe
@@ -344,17 +347,23 @@ async def deletar_bolao(
             detail="Bolão não encontrado"
         )
     
-    # Verificar se tem cotas vendidas
     bolao = existing.data[0] if isinstance(existing.data, list) else existing.data
-    cotas_vendidas = bolao["total_cotas"] - bolao.get("cotas_disponiveis", bolao["total_cotas"])
 
-    if cotas_vendidas > 0:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Não é possível deletar um bolão com cotas já vendidas ({cotas_vendidas} cotas)"
-        )
+    # Verificar se tem cotas vendidas (bypass com force=true)
+    if not force:
+        cotas_vendidas = bolao["total_cotas"] - bolao.get("cotas_disponiveis", bolao["total_cotas"])
+        if cotas_vendidas > 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Não é possível deletar um bolão com cotas já vendidas ({cotas_vendidas} cotas). Use ?force=true para forçar."
+            )
     
-    # Deletar jogos primeiro (se existirem)
+    # Deletar TODAS as dependências na ordem correta (filhas → pai)
+    await supabase.table("distribuicao_premios").delete().eq("bolao_id", bolao_id).execute()
+    await supabase.table("premiacoes_bolao").delete().eq("bolao_id", bolao_id).execute()
+    await supabase.table("acertos_concurso").delete().eq("bolao_id", bolao_id).execute()
+    await supabase.table("resultados_concurso").delete().eq("bolao_id", bolao_id).execute()
+    await supabase.table("cotas").delete().eq("bolao_id", bolao_id).execute()
     await supabase.table("jogos_bolao").delete().eq("bolao_id", bolao_id).execute()
     
     # Deletar o bolão
@@ -367,7 +376,7 @@ async def deletar_bolao(
         )
     
     return {
-        "mensagem": "Bolão deletado com sucesso",
+        "mensagem": "Bolão e todas as dependências deletados com sucesso",
         "bolao_id": bolao_id
     }
 
@@ -1229,3 +1238,66 @@ async def redistribuir_premio(
         "premio_total": round(premio_distribuido, 2),
         "mensagem": f"Prêmio R$ {premio_distribuido:.2f} distribuído",
     }
+
+
+# ===================================
+# RESET DE DADOS (ADMIN — SOMENTE DEV)
+# ===================================
+
+@router.post("/reset-dados")
+async def reset_dados():
+    """
+    Reseta TODOS os dados de bolões, resultados, prêmios e saldos.
+    ⚠️ Apenas para ambiente de desenvolvimento/testes!
+    """
+    from app.config import settings
+    if settings.ENVIRONMENT == "production":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Reset de dados não é permitido em produção!"
+        )
+
+    contagem = {}
+
+    # Ordem: tabelas filhas → tabelas pai
+    tabelas = [
+        "distribuicao_premios",
+        "premiacoes_bolao",
+        "acertos_concurso",
+        "resultados_concurso",
+        "cotas",
+        "jogos_bolao",
+        "boloes",
+    ]
+
+    for tabela in tabelas:
+        # Contar registros antes de deletar
+        count_result = await supabase.table(tabela).select("id", count="exact").execute()
+        total = count_result.count if hasattr(count_result, 'count') and count_result.count else len(count_result.data or [])
+
+        # Deletar todos os registros
+        if total > 0:
+            await supabase.table(tabela).delete().neq("id", "00000000-0000-0000-0000-000000000000").execute()
+
+        contagem[tabela] = total
+
+    # Zerar saldos das carteiras
+    await supabase.table("carteira").update({
+        "saldo_disponivel": 0,
+        "saldo_bloqueado": 0
+    }).neq("id", "00000000-0000-0000-0000-000000000000").execute()
+
+    # Limpar transações de prêmio
+    trans_result = await supabase.table("transacoes").select("id").in_("origem", ["premiacao", "premiacao_criador"]).execute()
+    trans_count = len(trans_result.data or [])
+    if trans_count > 0:
+        await supabase.table("transacoes").delete().in_("origem", ["premiacao", "premiacao_criador"]).execute()
+    contagem["transacoes_premio"] = trans_count
+
+    logger.info(f"RESET DE DADOS executado: {contagem}")
+
+    return {
+        "mensagem": "Todos os dados foram resetados com sucesso!",
+        "registros_deletados": contagem,
+    }
+
